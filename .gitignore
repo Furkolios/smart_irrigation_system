@@ -1,0 +1,5 @@
+.env
+__pycache__/
+*.pyc
+.smart_irrigation_cache/
+*.log
