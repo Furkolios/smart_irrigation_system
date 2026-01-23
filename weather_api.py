@@ -216,7 +216,7 @@ class CacheManager:
 # MAIN API CLASS
 # =============================================================================
 
-class SmartIrrigationWeatherAPI:
+class WeatherAPI:
     """
     Weather API for Smart Irrigation Systems.
     
@@ -865,7 +865,7 @@ def create_api(
     cache_enabled: bool = True,
     log_file: str = None,
     silent: bool = False
-) -> SmartIrrigationWeatherAPI:
+) -> WeatherAPI:
     """
     Convenience function to create API instance.
     
@@ -885,7 +885,7 @@ def create_api(
     
     key = api_key or os.getenv('WEATHER_API_KEY')
     
-    return SmartIrrigationWeatherAPI(
+    return WeatherAPI(
         api_key=key,
         cache_enabled=cache_enabled,
         log_file=log_file,
@@ -902,7 +902,7 @@ if __name__ == "__main__":
     load_dotenv()
     
     # Create API with logging to file
-    api = SmartIrrigationWeatherAPI(
+    weather_api = WeatherAPI(
         api_key=os.getenv('WEATHER_API_KEY'),
         cache_enabled=True,
         log_file="irrigation_weather.log",
@@ -911,7 +911,7 @@ if __name__ == "__main__":
     
     # Test connection
     print("Testing connection...")
-    if api.test_connection():
+    if weather_api.test_connection():
         print("✓ Connection successful\n")
     else:
         print("✗ Connection failed")
@@ -922,7 +922,7 @@ if __name__ == "__main__":
     elevation = 35
     
     print(f"Fetching irrigation data for {city}...")
-    data = api.get_irrigation_data(city, max_days=3, elevation=elevation)
+    data = weather_api.get_irrigation_data(city, max_days=3, elevation=elevation)
     
     if data:
         print(f"\n{'='*50}")
