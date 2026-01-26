@@ -30,13 +30,13 @@ class PlantAPI:
         Initialize the Perenual API client.
         
         Args:
-            api_key: Optional API key. If not provided, reads from PLANT_API_KEY env variable.
+            api_key: Optional API key. If not provided, reads from PERENUAL_API_KEY env variable.
         """
-        self.api_key = api_key or os.getenv('PLANT_API_KEY')
+        self.api_key = api_key or os.getenv('PERENUAL_API_KEY')
         if not self.api_key:
             raise ValueError(
                 "API key not found. Either pass api_key parameter or "
-                "set PLANT_API_KEY in your .env file"
+                "set PERENUAL_API_KEY in your .env file"
             )
         
         self.base_url = "https://www.perenual.com/api/v2"
@@ -290,14 +290,14 @@ class PlantAPI:
 # Example usage and testing
 if __name__ == "__main__":
     # Initialize the API client
-    # Make sure you have PLANT_API_KEY in your .env file
+    # Make sure you have PERENUAL_API_KEY in your .env file
     try:
         plant_api = PlantAPI()
     except ValueError as e:
         print(f"Setup Error: {e}")
         print("\nTo use this module:")
         print("1. Create a .env file in your project directory")
-        print("2. Add: PLANT_API_KEY=your_api_key_here")
+        print("2. Add: PERENUAL_API_KEY=your_api_key_here")
         print("3. Get your API key from: https://perenual.com/user/developer")
         exit(1)
     

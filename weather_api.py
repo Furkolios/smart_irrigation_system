@@ -256,7 +256,7 @@ class WeatherAPI:
         if not api_key:
             raise ValueError(
                 "API key is required. "
-                "Set WEATHER_API_KEY environment variable or pass directly."
+                "Set OPENWEATHER_API_KEY environment variable or pass directly."
             )
         
         self.api_key = api_key
@@ -872,7 +872,7 @@ def create_api(
     Automatically loads API key from environment if not provided.
     
     Args:
-        api_key: OpenWeatherMap API key (or set WEATHER_API_KEY env var)
+        api_key: OpenWeatherMap API key (or set OPENWEATHER_API_KEY env var)
         cache_enabled: Enable response caching
         log_file: Path to log file
         silent: Disable all logging
@@ -883,7 +883,7 @@ def create_api(
     from dotenv import load_dotenv
     load_dotenv()
     
-    key = api_key or os.getenv('WEATHER_API_KEY')
+    key = api_key or os.getenv('OPENWEATHER_API_KEY')
     
     return WeatherAPI(
         api_key=key,
@@ -903,7 +903,7 @@ if __name__ == "__main__":
     
     # Create API with logging to file
     weather_api = WeatherAPI(
-        api_key=os.getenv('WEATHER_API_KEY'),
+        api_key=os.getenv('OPENWEATHER_API_KEY'),
         cache_enabled=True,
         log_file="irrigation_weather.log",
         silent=False
