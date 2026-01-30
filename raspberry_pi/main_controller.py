@@ -133,7 +133,7 @@ class MockSensorProvider(SensorDataProvider):
     Mock sensor provider for testing without Arduino.
     """
     
-    def __init__(self, zones: list, initial_moisture: float = 50.0):
+    def __init__(self, zones: list, initial_moisture: float = 20.0):
         self.zones = zones
         self._moisture_levels = {z['zone_id']: initial_moisture for z in zones}
         self._tank_level = 80.0
