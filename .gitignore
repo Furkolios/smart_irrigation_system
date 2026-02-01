@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .smart_irrigation_cache/
 *.log
+to_do_list
