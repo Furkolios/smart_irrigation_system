@@ -43,8 +43,8 @@ from decision_engine import (
 from weather_api import WeatherAPI
 from plant_api import PlantAPI
 
-# This would be written by your friend
-# from arduino_interface import ArduinoInterface
+# Arduino sensor interface
+from arduino_interface import ArduinoSensorProvider
 
 
 # =============================================================================
@@ -57,7 +57,8 @@ DEFAULT_CONFIG = {
         "elevation_m": 35
     },
     "tank": {
-        "capacity_liters": 100.0
+        "capacity_liters": 100.0,
+        "height_cm": 50.0  # Tank height for ultrasonic sensor calculation
     },
     "zones": [
         {
@@ -70,6 +71,17 @@ DEFAULT_CONFIG = {
             "moisture_threshold_target": 60.0,
             "priority_weight": 1.0,
             "valve_pin": 17  # GPIO pin for valve control
+        },
+        {
+            "zone_id": "zone_2",
+            "name": "Zone 2",
+            "plant_id": None,
+            "area_m2": 1.0,
+            "valve_flow_rate_lpm": 2.0,
+            "moisture_threshold_low": 30.0,
+            "moisture_threshold_target": 60.0,
+            "priority_weight": 1.0,
+            "valve_pin": 18  # GPIO pin for valve control
         }
     ],
     "timing": {
@@ -170,41 +182,6 @@ class MockSensorProvider(SensorDataProvider):
             self._tank_level = max(0, self._tank_level - liters)
 
 
-class ArduinoSensorProvider(SensorDataProvider):
-    """
-    Real sensor provider using Arduino serial interface.
-    
-    This is a placeholder - your friend will implement the actual
-    serial communication with the Arduino.
-    """
-    
-    def __init__(self, port: str = "/dev/ttyUSB0", baud_rate: int = 9600):
-        self.port = port
-        self.baud_rate = baud_rate
-        # self.serial = serial.Serial(port, baud_rate)
-        self._logger = logging.getLogger('arduino')
-        self._logger.info(f"Arduino interface initialized on {port}")
-    
-    def get_sensor_readings(self) -> Dict[str, Dict[str, float]]:
-        """
-        Read sensor data from Arduino.
-        
-        Expected Arduino message format (JSON):
-        {"zone_1": {"moisture": 45, "temp": 22, "humidity": 60}, ...}
-        """
-        # Placeholder - your friend implements this
-        # line = self.serial.readline().decode('utf-8')
-        # data = json.loads(line)
-        
-        # For now, raise to indicate not implemented
-        raise NotImplementedError(
-            "Arduino interface not yet implemented. "
-            "Use MockSensorProvider for testing."
-        )
-    
-    def get_tank_level(self) -> float:
-        """Read tank level from Arduino."""
-        raise NotImplementedError
 
 
 # =============================================================================
@@ -721,33 +698,54 @@ def main():
     parser.add_argument('--force', action='store_true', help='Force irrigation (bypass constraints)')
     parser.add_argument('--status', action='store_true', help='Print status and exit')
     parser.add_argument('--mock', action='store_true', help='Use mock sensors/valves')
+    parser.add_argument('--port', type=str, default='/dev/ttyACM0', help='Arduino serial port')
     args = parser.parse_args()
-    
+
     # Load config
     config = load_config(args.config)
-    
+
     # Setup API clients (if available)
     weather_api = None
     plant_api = None
-    
+
     try:
         from weather_api import WeatherAPI, create_api
         weather_api = create_api(silent=True)
         print("✓ Weather API initialized")
     except Exception as e:
         print(f"⚠ Weather API not available: {e}")
-    
+
     try:
         from plant_api import PlantAPI
         plant_api = PlantAPI()
         print("✓ Plant API initialized")
     except Exception as e:
         print(f"⚠ Plant API not available: {e}")
-    
+
+    # Setup sensor provider
+    sensor_provider = None
+    if args.mock:
+        sensor_provider = MockSensorProvider(config.get('zones', []))
+        print("✓ Using mock sensors")
+    else:
+        try:
+            tank_config = config.get('tank', {})
+
+            sensor_provider = ArduinoSensorProvider(
+                port=args.port,
+                tank_capacity_liters=tank_config.get('capacity_liters', 100.0),
+                tank_height_cm=tank_config.get('height_cm', 50.0)
+            )
+            print(f"✓ Arduino connected on {args.port}")
+        except Exception as e:
+            print(f"⚠ Arduino not available: {e}")
+            print("  Falling back to mock sensors. Use --mock to suppress this warning.")
+            sensor_provider = MockSensorProvider(config.get('zones', []))
+
     # Create controller
     controller = IrrigationController(
         config=config,
-        sensor_provider=MockSensorProvider(config.get('zones', [])) if args.mock else None,
+        sensor_provider=sensor_provider,
         valve_controller=None,  # Will use mock
         weather_api=weather_api,
         plant_api=plant_api
