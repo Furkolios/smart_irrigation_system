@@ -39,14 +39,6 @@ const ZoneConfig ZONES[] = {
 const int NUM_ZONES = sizeof(ZONES) / sizeof(ZONES[0]);
 
 // =============================================================================
-// TANK SENSOR CONFIGURATION (Optional)
-// =============================================================================
-
-const int TANK_TRIG_PIN = 9;
-const int TANK_ECHO_PIN = 10;
-const bool TANK_SENSOR_ENABLED = false;  // Set true if you have tank sensor
-
-// =============================================================================
 // TIMING CONFIGURATION
 // =============================================================================
 
@@ -67,11 +59,6 @@ void setup() {
   Serial.begin(9600);
   Wire.begin();
   dht20.begin();
-
-  if (TANK_SENSOR_ENABLED) {
-    pinMode(TANK_TRIG_PIN, OUTPUT);
-    pinMode(TANK_ECHO_PIN, INPUT);
-  }
 
   // Wait for sensors to stabilize
   delay(1000);
@@ -121,22 +108,6 @@ float rawToPercent(int raw, int airValue, int waterValue) {
   return percent;
 }
 
-float readTankLevel() {
-  digitalWrite(TANK_TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TANK_TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TANK_TRIG_PIN, LOW);
-
-  long duration = pulseIn(TANK_ECHO_PIN, HIGH, 30000);
-
-  if (duration == 0) {
-    return -1;
-  }
-
-  return duration * 0.0343 / 2.0;
-}
-
 // =============================================================================
 // DATA OUTPUT
 // =============================================================================
@@ -171,13 +142,6 @@ void sendSensorData() {
   Serial.print(temperature, 1);
   Serial.print(",\"humidity\":");
   Serial.print(humidity, 1);
-
-  // Add tank level if enabled
-  if (TANK_SENSOR_ENABLED) {
-    float tankCm = readTankLevel();
-    Serial.print(",\"tank_cm\":");
-    Serial.print(tankCm, 1);
-  }
 
   // End JSON object
   Serial.println("}");

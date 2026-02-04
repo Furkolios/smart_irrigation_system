@@ -11,7 +11,6 @@ Usage:
 
     provider = ArduinoSensorProvider(port="/dev/ttyACM0")
     readings = provider.get_sensor_readings()
-    tank_level = provider.get_tank_level()
 """
 
 import json
@@ -26,7 +25,7 @@ class ArduinoSensorProvider:
     Reads sensor data from Arduino and provides it in the format expected by main_controller.
 
     The Arduino sends JSON lines like:
-        {"zone_1":{"moisture":45.0},"zone_2":{"moisture":52.0},"temp":22.5,"humidity":60.0,"tank_cm":15.0}
+        {"zone_1":{"moisture":45.0},"zone_2":{"moisture":52.0},"temp":22.5,"humidity":60.0}
 
     This class converts that to the format expected by the decision engine:
         {
@@ -39,8 +38,6 @@ class ArduinoSensorProvider:
         self,
         port: str = "/dev/ttyACM0",
         baud_rate: int = 9600,
-        tank_height_cm: float = 50.0,
-        tank_capacity_liters: float = 100.0,
         timeout: float = 5.0
     ):
         """
@@ -49,19 +46,14 @@ class ArduinoSensorProvider:
         Args:
             port: Serial port (e.g., "/dev/ttyACM0" on Linux, "COM3" on Windows)
             baud_rate: Serial baud rate (must match Arduino)
-            tank_height_cm: Height of tank in cm (for level calculation)
-            tank_capacity_liters: Tank capacity in liters
             timeout: Serial read timeout in seconds
         """
         self.port = port
         self.baud_rate = baud_rate
-        self.tank_height_cm = tank_height_cm
-        self.tank_capacity_liters = tank_capacity_liters
         self.timeout = timeout
 
         self._serial: Optional[serial.Serial] = None
         self._last_readings: Dict[str, Dict[str, float]] = {}
-        self._last_tank_cm: float = -1
         self._logger = logging.getLogger("arduino")
 
         self._connect()
@@ -152,10 +144,6 @@ class ArduinoSensorProvider:
             temp = data.get("temp", 20.0)
             humidity = data.get("humidity", 50.0)
 
-            # Store tank reading if present
-            if "tank_cm" in data:
-                self._last_tank_cm = data["tank_cm"]
-
             # Build readings for each zone
             self._last_readings = {}
             for key, value in data.items():
@@ -174,34 +162,6 @@ class ArduinoSensorProvider:
                 )
 
         return self._last_readings.copy() if self._last_readings else {}
-
-    def get_tank_level(self) -> float:
-        """
-        Get current tank water level in liters.
-
-        Converts distance measurement (cm from top) to water volume.
-        If no tank sensor, returns a default value.
-        """
-        # Try to get fresh reading if we don't have tank data
-        if self._last_tank_cm < 0:
-            self._read_latest()
-
-        # If still no tank sensor data, return default
-        if self._last_tank_cm < 0:
-            self._logger.debug("No tank sensor - returning default level")
-            return self.tank_capacity_liters * 0.8  # Default 80% full
-
-        # Convert distance from top to water level
-        water_height_cm = self.tank_height_cm - self._last_tank_cm
-        water_height_cm = max(0, min(water_height_cm, self.tank_height_cm))
-
-        # Convert to liters (assuming cylindrical/rectangular tank)
-        level_ratio = water_height_cm / self.tank_height_cm
-        level_liters = level_ratio * self.tank_capacity_liters
-
-        self._logger.debug(f"Tank level: {level_liters:.1f}L ({level_ratio*100:.0f}%)")
-
-        return level_liters
 
     def close(self):
         """Close serial connection."""
@@ -229,10 +189,8 @@ if __name__ == "__main__":
     try:
         while True:
             readings = provider.get_sensor_readings()
-            tank = provider.get_tank_level()
 
             if readings:
-                print(f"Tank: {tank:.1f}L")
                 for zone_id, data in sorted(readings.items()):
                     print(
                         f"  [{zone_id}] "
