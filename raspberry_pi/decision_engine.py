@@ -87,6 +87,8 @@ class TankStatus:
     
     @property
     def level_percent(self) -> float:
+        if self.capacity_liters <= 0:
+            return 0.0
         return (self.current_level_liters / self.capacity_liters) * 100
     
     @property

@@ -25,6 +25,11 @@ Usage:
     # With custom scenario
     demo = DemoMode(scenario="critical", num_zones=4)
     
+    # With telemetry (sends data to dashboard server)
+    from telemetry import TelemetrySender
+    sender = TelemetrySender(server_ip="192.168.1.50")
+    demo = DemoMode(scenario="critical", telemetry_sender=sender)
+    
     # For API/Dashboard integration
     demo_data = demo.get_state()
 """
@@ -44,7 +49,13 @@ from decision_engine import (
     TankStatus,
     DecisionResult
 )
-from tank_sensor import get_tank_level
+
+# Import telemetry (optional — demo still works without it)
+try:
+    from telemetry import TelemetrySender
+    TELEMETRY_AVAILABLE = True
+except ImportError:
+    TELEMETRY_AVAILABLE = False
 
 
 # =============================================================================
@@ -142,6 +153,8 @@ class DemoMode:
     
     Provides mock sensor data, weather data, and bypasses all constraints
     to allow testing and demonstration without hardware.
+    
+    Optionally sends telemetry to the dashboard server after each cycle.
     """
     
     # Zone names for demos
@@ -154,7 +167,8 @@ class DemoMode:
         self,
         scenario: str = "normal",
         num_zones: int = 3,
-        tank_capacity: float = 100.0
+        tank_capacity: float = 100.0,
+        telemetry_sender: Optional[Any] = None
     ):
         """
         Initialize demo mode.
@@ -163,10 +177,12 @@ class DemoMode:
             scenario: One of "normal", "critical", "rain", "healthy", "low_tank", "mixed"
             num_zones: Number of zones to simulate (1-6)
             tank_capacity: Tank capacity in liters
+            telemetry_sender: Optional TelemetrySender instance for dashboard integration
         """
         self.scenario = self._parse_scenario(scenario)
         self.num_zones = min(6, max(1, num_zones))
         self.tank_capacity = tank_capacity
+        self.telemetry = telemetry_sender
         
         self._logger = logging.getLogger('demo_mode')
         
@@ -174,6 +190,8 @@ class DemoMode:
         self._init_demo()
         
         self._logger.info(f"Demo initialized: scenario={scenario}, zones={num_zones}")
+        if self.telemetry:
+            self._logger.info(f"Telemetry enabled → {self.telemetry.url}")
     
     def _parse_scenario(self, scenario: str) -> DemoScenario:
         """Parse scenario string to enum."""
@@ -217,7 +235,7 @@ class DemoMode:
                 humidity_percent=50.0 + random.uniform(-10, 15)
             )
         
-        # Tank level
+        # Tank level (fully simulated, no hardware needed)
         self.tank_level = self._get_initial_tank_level()
         
         # Create decision engine with constraints bypassed
@@ -299,7 +317,7 @@ class DemoMode:
                 humidity_percent=state.humidity_percent + random.uniform(-2, 2)
             )
         
-        # Tank status
+        # Tank status (fully simulated)
         tank_status = TankStatus(
             current_level_liters=self.tank_level,
             capacity_liters=self.tank_capacity
@@ -318,6 +336,10 @@ class DemoMode:
             self._apply_irrigation(result)
         
         self.last_result = result
+        
+        # Send telemetry to dashboard server
+        self._send_telemetry(sensor_data, tank_status, result)
+        
         return result
     
     def _apply_irrigation(self, result: DecisionResult):
@@ -335,6 +357,38 @@ class DemoMode:
         # Update tank
         self.tank_level = max(0, self.tank_level - result.total_water_liters)
         self.total_water_used += result.total_water_liters
+    
+    def _send_telemetry(
+        self,
+        sensor_data: Dict[str, SensorReading],
+        tank_status: TankStatus,
+        result: DecisionResult
+    ):
+        """Send telemetry after a cycle if sender is available."""
+        if self.telemetry is None:
+            return
+        
+        try:
+            # Convert SensorReading objects to raw dicts for telemetry
+            raw_sensors = {
+                zone_id: {
+                    'soil_moisture_percent': reading.soil_moisture_percent,
+                    'temperature_c': reading.temperature_c,
+                    'humidity_percent': reading.humidity_percent,
+                }
+                for zone_id, reading in sensor_data.items()
+            }
+            
+            self.telemetry.send(
+                sensor_data=raw_sensors,
+                tank_level_liters=tank_status.current_level_liters,
+                tank_capacity_liters=tank_status.capacity_liters,
+                weather_data=self.weather_data,
+                decision_result=result.to_dict(),
+                print_to_console=True
+            )
+        except Exception as e:
+            self._logger.warning(f"Telemetry send failed: {e}")
     
     def simulate_time_passage(self, hours: float = 4):
         """
@@ -390,7 +444,8 @@ class DemoMode:
                 'is_demo': True,
                 'scenario': self.scenario.value,
                 'cycle_count': self.cycle_count,
-                'total_water_used_liters': round(self.total_water_used, 2)
+                'total_water_used_liters': round(self.total_water_used, 2),
+                'telemetry_enabled': self.telemetry is not None
             },
             'tank': {
                 'level_liters': round(self.tank_level, 1),
@@ -424,14 +479,29 @@ class DemoMode:
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
-def create_demo(scenario: str = "normal", num_zones: int = 3) -> DemoMode:
-    """Quick demo creation."""
-    return DemoMode(scenario=scenario, num_zones=num_zones)
+def create_demo(
+    scenario: str = "normal",
+    num_zones: int = 3,
+    server_ip: Optional[str] = None
+) -> DemoMode:
+    """
+    Quick demo creation.
+    
+    Args:
+        scenario: Demo scenario name
+        num_zones: Number of zones
+        server_ip: Dashboard server IP (None = no telemetry)
+    """
+    telemetry = None
+    if server_ip and TELEMETRY_AVAILABLE:
+        telemetry = TelemetrySender(server_ip=server_ip)
+    
+    return DemoMode(scenario=scenario, num_zones=num_zones, telemetry_sender=telemetry)
 
 
-def quick_demo_cycle(scenario: str = "normal") -> Dict[str, Any]:
+def quick_demo_cycle(scenario: str = "normal", server_ip: Optional[str] = None) -> Dict[str, Any]:
     """Run a single demo cycle and return state."""
-    demo = create_demo(scenario)
+    demo = create_demo(scenario, server_ip=server_ip)
     demo.run_cycle()
     return demo.get_state()
 

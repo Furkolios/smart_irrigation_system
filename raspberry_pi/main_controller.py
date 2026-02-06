@@ -10,6 +10,7 @@ This script is the entry point that ties together:
     - Plant data (from plant_api module)
     - Decision making (from decision_engine module)
     - Valve control (from valve_controller module)
+    - Telemetry (from telemetry module) — sends data to dashboard server
 
 Usage:
     # Production mode (real hardware)
@@ -24,6 +25,9 @@ Usage:
     
     # Single cycle
     python main_controller.py --once --mock
+    
+    # Specify dashboard server IP
+    python main_controller.py --mock --server-ip 192.168.1.50
 """
 
 import os
@@ -48,6 +52,9 @@ from decision_engine import (
 from sensor_providers import SensorDataProvider, ArduinoSensorProvider, MockSensorProvider
 from valve_controller import ValveController, MockValveController, create_valve_controller
 from tank_sensor import get_tank_level
+
+# Telemetry — sends data to dashboard server
+from telemetry import TelemetrySender
 
 # API modules (optional)
 try:
@@ -88,6 +95,11 @@ DEFAULT_CONFIG = {
             "valve_pin": 17
         }
     ],
+    "server": {
+        "ip": None,          # Dashboard server IP (None = read from .env)
+        "port": 8000,
+        "enabled": True       # Set False to disable telemetry
+    },
     "timing": {
         "check_interval_seconds": 600,  # 10 minutes
     },
@@ -122,6 +134,7 @@ class IrrigationController:
     - Fetching weather/plant data
     - Making irrigation decisions
     - Executing irrigation commands
+    - Sending telemetry to the dashboard server
     """
     
     def __init__(
@@ -130,7 +143,9 @@ class IrrigationController:
         sensor_provider: Optional[SensorDataProvider] = None,
         valve_controller: Optional[ValveController] = None,
         weather_api: Optional[Any] = None,
-        plant_api: Optional[Any] = None
+        plant_api: Optional[Any] = None,
+        telemetry_sender: Optional[TelemetrySender] = None,
+        mock_tank_level: Optional[float] = None
     ):
         """
         Initialize the controller.
@@ -141,6 +156,10 @@ class IrrigationController:
             valve_controller: Valve controller (uses mock if None)
             weather_api: WeatherAPI instance (optional)
             plant_api: PlantAPI instance (optional)
+            telemetry_sender: TelemetrySender instance (auto-created if None and enabled)
+            mock_tank_level: Fixed tank level in liters for mock/testing mode.
+                             If set, bypasses the real camera-based tank sensor.
+                             Decreases as water is used and can be refilled.
         """
         self.config = config
         self._setup_logging()
@@ -162,9 +181,17 @@ class IrrigationController:
         )
         self.valve_controller = valve_controller or MockValveController(self.zone_pins)
         
+        # Tank: use mock level if provided, otherwise real sensor
+        self._mock_tank_level = mock_tank_level
+        if mock_tank_level is not None:
+            self.logger.info(f"Using mock tank level: {mock_tank_level:.1f}L")
+        
         # APIs
         self.weather_api = weather_api
         self.plant_api = plant_api
+        
+        # Telemetry — sends data to dashboard
+        self.telemetry = self._setup_telemetry(telemetry_sender)
         
         # Decision engine
         self.decision_engine = IrrigationDecisionEngine(zones=self.zones)
@@ -176,8 +203,34 @@ class IrrigationController:
         # State
         self._running = False
         self._last_decision: Optional[DecisionResult] = None
+        self._last_weather: Dict[str, Any] = {}
         
         self.logger.info("Controller initialized successfully")
+    
+    def _setup_telemetry(self, sender: Optional[TelemetrySender]) -> Optional[TelemetrySender]:
+        """Setup telemetry sender from config or provided instance."""
+        # Use provided sender if given
+        if sender is not None:
+            self.logger.info("Telemetry sender provided externally")
+            return sender
+        
+        # Check if telemetry is enabled in config
+        server_config = self.config.get('server', {})
+        if not server_config.get('enabled', True):
+            self.logger.info("Telemetry disabled in config")
+            return None
+        
+        # Create sender from config
+        try:
+            telemetry = TelemetrySender(
+                server_ip=server_config.get('ip'),  # None = reads from .env
+                server_port=server_config.get('port', 8000)
+            )
+            self.logger.info("✓ Telemetry sender initialized")
+            return telemetry
+        except Exception as e:
+            self.logger.warning(f"⚠ Telemetry setup failed: {e}")
+            return None
     
     def _setup_logging(self):
         """Configure logging."""
@@ -264,11 +317,30 @@ class IrrigationController:
             for zone_id, data in raw.items()
         }
     
+    def _get_raw_sensor_data(self) -> Dict[str, Dict[str, float]]:
+        """Get raw sensor readings dict (for telemetry)."""
+        return self.sensor_provider.get_sensor_readings()
+    
     def _get_tank_status(self) -> TankStatus:
-        """Get tank status."""
-        level = get_tank_level()
+        """
+        Get tank status.
+        
+        Uses mock tank level if set (for --mock mode),
+        otherwise reads from the real camera-based tank sensor.
+        """
         capacity = self.config.get('tank', {}).get('capacity_liters', 50.0)
+        
+        if self._mock_tank_level is not None:
+            level = self._mock_tank_level
+        else:
+            level = get_tank_level()
+        
         return TankStatus(current_level_liters=level, capacity_liters=capacity)
+    
+    def _update_mock_tank(self, water_used: float):
+        """Decrease mock tank level after irrigation."""
+        if self._mock_tank_level is not None:
+            self._mock_tank_level = max(0.0, self._mock_tank_level - water_used)
     
     def _execute_irrigation(self, decision: DecisionResult):
         """Execute irrigation commands."""
@@ -297,7 +369,33 @@ class IrrigationController:
                 self.logger.error(f"Irrigation error for {cmd.zone_id}: {e}")
                 self.valve_controller.close_valve(cmd.zone_id)
         
+        # Update mock tank level
+        self._update_mock_tank(decision.total_water_liters)
+        
         self.logger.info("Irrigation cycle complete")
+    
+    def _send_telemetry(
+        self,
+        raw_sensors: Dict[str, Dict[str, float]],
+        tank_status: TankStatus,
+        weather_data: Dict[str, Any],
+        decision: DecisionResult
+    ):
+        """Send telemetry data to the dashboard server."""
+        if self.telemetry is None:
+            return
+        
+        try:
+            self.telemetry.send(
+                sensor_data=raw_sensors,
+                tank_level_liters=tank_status.current_level_liters,
+                tank_capacity_liters=tank_status.capacity_liters,
+                weather_data=weather_data,
+                decision_result=decision.to_dict(),
+                print_to_console=True
+            )
+        except Exception as e:
+            self.logger.warning(f"Telemetry send failed: {e}")
     
     # =========================================================================
     # PUBLIC METHODS
@@ -308,9 +406,39 @@ class IrrigationController:
         self.logger.info("Running decision cycle")
         
         # Gather data
-        sensor_data = self._get_sensor_data()
+        raw_sensors = self._get_raw_sensor_data()
+        
+        # Warn if no sensor data received (Arduino disconnected, etc.)
+        if not raw_sensors:
+            self.logger.warning(
+                "No sensor data received — Arduino may be disconnected. "
+                "Skipping this cycle."
+            )
+            now = datetime.now()
+            weather_data = self._get_weather_data()
+            tank_status = self._get_tank_status()
+            return DecisionResult(
+                timestamp=now, should_irrigate=False,
+                delay_reason="No sensor data available",
+                commands=[], total_water_liters=0,
+                tank_after_liters=tank_status.current_level_liters,
+                weather_summary={'date': now.strftime('%Y-%m-%d')}
+            )
+        
+        sensor_data = {
+            zone_id: SensorReading(
+                zone_id=zone_id,
+                soil_moisture_percent=data.get('soil_moisture_percent', 50.0),
+                temperature_c=data.get('temperature_c', 20.0),
+                humidity_percent=data.get('humidity_percent', 50.0)
+            )
+            for zone_id, data in raw_sensors.items()
+        }
         weather_data = self._get_weather_data()
         tank_status = self._get_tank_status()
+        
+        # Store weather for telemetry
+        self._last_weather = weather_data
         
         # Log state
         self.logger.info(f"Tank: {tank_status.level_percent:.1f}%")
@@ -327,11 +455,14 @@ class IrrigationController:
         
         self._last_decision = decision
         
-        # Execute
+        # Execute irrigation
         if decision.should_irrigate:
             self._execute_irrigation(decision)
         else:
             self.logger.info(f"No irrigation: {decision.delay_reason or 'Not needed'}")
+        
+        # Send telemetry to dashboard server
+        self._send_telemetry(raw_sensors, tank_status, weather_data, decision)
         
         return decision
     
@@ -391,7 +522,8 @@ class IrrigationController:
                 }
                 for zone_id, r in sensor_data.items()
             },
-            'last_decision': self._last_decision.to_dict() if self._last_decision else None
+            'last_decision': self._last_decision.to_dict() if self._last_decision else None,
+            'telemetry_enabled': self.telemetry is not None
         }
 
 
@@ -408,9 +540,16 @@ def run_demo_mode(args):
     print(f"Scenario: {args.scenario.upper()}")
     print("=" * 60)
     
+    # Setup telemetry for demo mode if server IP provided
+    telemetry = None
+    if args.server_ip:
+        telemetry = TelemetrySender(server_ip=args.server_ip)
+        print(f"✓ Telemetry enabled → {telemetry.url}")
+    
     demo = DemoMode(
         scenario=args.scenario,
-        num_zones=args.zones
+        num_zones=args.zones,
+        telemetry_sender=telemetry
     )
     
     if args.once:
@@ -455,6 +594,10 @@ def main():
                        choices=['normal', 'critical', 'rain', 'healthy', 'low_tank', 'mixed'],
                        help='Demo scenario')
     parser.add_argument('--zones', type=int, default=3, help='Number of zones')
+    parser.add_argument('--server-ip', type=str, default=None,
+                       help='Dashboard server IP (overrides .env)')
+    parser.add_argument('--no-telemetry', action='store_true',
+                       help='Disable telemetry sending')
     args = parser.parse_args()
     
     # Demo mode
@@ -464,6 +607,12 @@ def main():
     
     # Load config
     config = load_config(args.config)
+    
+    # Override server config from CLI args
+    if args.server_ip:
+        config.setdefault('server', {})['ip'] = args.server_ip
+    if args.no_telemetry:
+        config.setdefault('server', {})['enabled'] = False
     
     # Setup APIs
     weather_api = None
@@ -486,12 +635,20 @@ def main():
     # Create controller
     zone_ids = [z['zone_id'] for z in config.get('zones', [])]
     
+    # In --mock mode, use a mock tank level (80% of capacity)
+    # since the real camera-based tank sensor won't be available
+    mock_tank = None
+    if args.mock:
+        capacity = config.get('tank', {}).get('capacity_liters', 50.0)
+        mock_tank = capacity * 0.8
+    
     controller = IrrigationController(
         config=config,
         sensor_provider=MockSensorProvider(zone_ids) if args.mock else None,
         valve_controller=None,
         weather_api=weather_api,
-        plant_api=plant_api
+        plant_api=plant_api,
+        mock_tank_level=mock_tank
     )
     
     # Execute
