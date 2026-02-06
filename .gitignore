@@ -4,3 +4,6 @@ __pycache__/
 .smart_irrigation_cache/
 *.log
 to_do_list
+
+venv/
+.venv/
