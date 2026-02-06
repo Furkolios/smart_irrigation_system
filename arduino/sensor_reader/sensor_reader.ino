@@ -1,51 +1,53 @@
 /*
- * Smart Irrigation - Arduino Sensor Reader (Dynamic Zones)
- * ========================================================
- * Reads sensors for multiple irrigation zones from a single Arduino.
- * Sends data as JSON over serial to Raspberry Pi.
- *
- * CONFIGURATION:
- *   Edit the ZONE CONFIGURATION section below to add/remove zones.
- *   When adding a multiplexer later, only modify the readMoisture() function.
+ * Smart Irrigation - Arduino Sensor Reader
+ * =========================================
+ * Reads soil moisture sensors and DHT20 (temp/humidity) for the 
+ * smart irrigation system. Sends JSON over serial to Raspberry Pi.
  *
  * Hardware:
- *   - DHT20 sensor (I2C) for temperature and humidity (shared)
+ *   - DHT20 sensor (I2C) for temperature and humidity
  *   - Capacitive soil moisture sensors (one per zone)
- *   - Optional: Ultrasonic sensor (HC-SR04) for tank level
+ *
+ * Output format (JSON):
+ *   {"zone_1":{"moisture":45.2},"zone_2":{"moisture":52.1},"temp":22.5,"humidity":60.0}
+ *
+ * Calibration:
+ *   1. Note the raw value with sensor in dry air (airValue)
+ *   2. Note the raw value with sensor in water (waterValue)
+ *   3. Update the ZONES array below with your values
  */
 
+#include <Wire.h>
 #include "DHT20.h"
 
 // =============================================================================
-// ZONE CONFIGURATION - Edit this section to add/remove zones
+// ZONE CONFIGURATION - Edit this section for your setup
 // =============================================================================
 
 struct ZoneConfig {
-  const char* id;      // Zone identifier (e.g., "zone_1")
+  const char* id;      // Zone identifier (must match Raspberry Pi config)
   int pin;             // Analog pin for moisture sensor
-  int airValue;        // Calibration: sensor reading in dry air
-  int waterValue;      // Calibration: sensor reading in water
+  int airValue;        // Calibration: raw reading in dry air (~600-650)
+  int waterValue;      // Calibration: raw reading in water (~300-350)
 };
 
 // Define your zones here - add or remove as needed
 const ZoneConfig ZONES[] = {
   {"zone_1", A0, 620, 310},
   {"zone_2", A1, 620, 310},
-  // Add more zones here:
   // {"zone_3", A2, 620, 310},
-  // {"zone_4", A3, 620, 310},
 };
 
 const int NUM_ZONES = sizeof(ZONES) / sizeof(ZONES[0]);
 
 // =============================================================================
-// TIMING CONFIGURATION
+// TIMING
 // =============================================================================
 
 const unsigned long READ_INTERVAL = 2000;  // ms between readings
 
 // =============================================================================
-// GLOBALS - Don't modify
+// GLOBALS
 // =============================================================================
 
 DHT20 dht20;
@@ -62,6 +64,11 @@ void setup() {
 
   // Wait for sensors to stabilize
   delay(1000);
+
+  // Startup message
+  Serial.print("Smart Irrigation Sensor Ready - ");
+  Serial.print(NUM_ZONES);
+  Serial.println(" zone(s)");
 }
 
 // =============================================================================
@@ -78,71 +85,61 @@ void loop() {
 }
 
 // =============================================================================
-// SENSOR READING FUNCTIONS
+// SENSOR FUNCTIONS
 // =============================================================================
 
-/*
- * Read moisture for a specific zone.
- *
- * MULTIPLEXER NOTE: When adding a multiplexer, modify this function
- * to select the appropriate channel before reading. The rest of the
- * code will work unchanged.
- */
 float readMoisture(int zoneIndex) {
   const ZoneConfig& zone = ZONES[zoneIndex];
-
-  // Direct analog read - replace this section for multiplexer
   int raw = analogRead(zone.pin);
-
-  // Convert to percentage
   return rawToPercent(raw, zone.airValue, zone.waterValue);
 }
 
 float rawToPercent(int raw, int airValue, int waterValue) {
   float percent = (float)(airValue - raw) / (airValue - waterValue) * 100.0;
-
-  // Clamp to valid range
+  
+  // Clamp to 0-100
   if (percent < 0) percent = 0;
   if (percent > 100) percent = 100;
-
+  
   return percent;
 }
 
 // =============================================================================
-// DATA OUTPUT
+// OUTPUT
 // =============================================================================
 
 void sendSensorData() {
-  // Read shared sensors
-  dht20.read();
-  float temperature = dht20.getTemperature();
-  float humidity = dht20.getHumidity();
+  // Read DHT20
+  int status = dht20.read();
+  float temperature = 20.0;  // Default fallback
+  float humidity = 50.0;     // Default fallback
+  
+  if (status == DHT20_OK) {
+    temperature = dht20.getTemperature();
+    humidity = dht20.getHumidity();
+  }
 
-  // Start JSON object
+  // Build JSON output
   Serial.print("{");
 
-  // Loop through all zones
+  // Zone moisture readings
   for (int i = 0; i < NUM_ZONES; i++) {
-    float moisture = readMoisture(i);
-
     Serial.print("\"");
     Serial.print(ZONES[i].id);
     Serial.print("\":{\"moisture\":");
-    Serial.print(moisture, 1);
+    Serial.print(readMoisture(i), 1);
     Serial.print("}");
-
-    // Add comma if not last zone
+    
     if (i < NUM_ZONES - 1) {
       Serial.print(",");
     }
   }
 
-  // Add shared temperature and humidity
+  // Temperature and humidity
   Serial.print(",\"temp\":");
   Serial.print(temperature, 1);
   Serial.print(",\"humidity\":");
   Serial.print(humidity, 1);
 
-  // End JSON object
   Serial.println("}");
 }
