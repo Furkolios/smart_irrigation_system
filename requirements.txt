@@ -9,6 +9,8 @@ fastapi>=0.100.0
 uvicorn>=0.23.0
 websockets>=11.0
 
+responses>=0.25.8
+
 # Hardware (Raspberry Pi only - skip on dev machines)
 # RPi.GPIO>=0.7.1
 # picamera2>=0.3.12
