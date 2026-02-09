@@ -1,44 +1,45 @@
 /*
- * Smart Irrigation - Arduino Sensor Reader
- * =========================================
- * Reads soil moisture sensors and DHT20 (temp/humidity) for the 
- * smart irrigation system. Sends JSON over serial to Raspberry Pi.
+ * Smart Irrigation - Arduino Sensor Reader (Single Zone)
+ * ======================================================
+ * Reads soil moisture, DHT20 (temp/humidity), and luminosity
+ * for ONE zone. Sends JSON over serial to Raspberry Pi.
  *
- * Hardware:
+ * Each Arduino handles one zone. Two Arduinos connect to the
+ * Raspberry Pi via separate USB ports.
+ *
+ * Hardware per Arduino:
  *   - DHT20 sensor (I2C) for temperature and humidity
- *   - Capacitive soil moisture sensors (one per zone)
+ *   - 1x Capacitive soil moisture sensor
+ *   - 1x Photoresistor (LDR) for luminosity
  *
  * Output format (JSON):
- *   {"zone_1":{"moisture":45.2},"zone_2":{"moisture":52.1},"temp":22.5,"humidity":60.0}
+ *   {"zone_1":{"moisture":45.2,"lux":23500},"temp":22.5,"humidity":60.0}
  *
- * Calibration:
- *   1. Note the raw value with sensor in dry air (airValue)
- *   2. Note the raw value with sensor in water (waterValue)
- *   3. Update the ZONES array below with your values
+ * Setup:
+ *   1. Set ZONE_ID below to match your config.json ("zone_1" or "zone_2")
+ *   2. Calibrate moisture: note airValue (dry) and waterValue (in water)
+ *   3. Upload to Arduino and connect to Raspberry Pi USB port
  */
 
 #include <Wire.h>
 #include "DHT20.h"
 
 // =============================================================================
-// ZONE CONFIGURATION - Edit this section for your setup
+// ZONE CONFIGURATION - Edit for each Arduino
 // =============================================================================
 
-struct ZoneConfig {
-  const char* id;      // Zone identifier (must match Raspberry Pi config)
-  int pin;             // Analog pin for moisture sensor
-  int airValue;        // Calibration: raw reading in dry air (~600-650)
-  int waterValue;      // Calibration: raw reading in water (~300-350)
-};
+// IMPORTANT: Change this to match the zone this Arduino is responsible for.
+// Arduino 1 → "zone_1", Arduino 2 → "zone_2"
+const char* ZONE_ID = "zone_1";
 
-// Define your zones here - add or remove as needed
-const ZoneConfig ZONES[] = {
-  {"zone_1", A0, 620, 310},
-  {"zone_2", A1, 620, 310},
-  // {"zone_3", A2, 620, 310},
-};
+// Soil moisture sensor
+const int MOISTURE_PIN = A0;
+const int AIR_VALUE = 620;    // Calibration: raw reading in dry air (~600-650)
+const int WATER_VALUE = 310;  // Calibration: raw reading in water (~300-350)
 
-const int NUM_ZONES = sizeof(ZONES) / sizeof(ZONES[0]);
+// Luminosity sensor (photoresistor / LDR)
+const int LDR_PIN = A1;
+const int LDR_RESISTOR_OHMS = 10000;  // Value of the voltage divider resistor
 
 // =============================================================================
 // TIMING
@@ -66,9 +67,8 @@ void setup() {
   delay(1000);
 
   // Startup message
-  Serial.print("Smart Irrigation Sensor Ready - ");
-  Serial.print(NUM_ZONES);
-  Serial.println(" zone(s)");
+  Serial.print("Smart Irrigation Sensor Ready - Zone: ");
+  Serial.println(ZONE_ID);
 }
 
 // =============================================================================
@@ -88,20 +88,52 @@ void loop() {
 // SENSOR FUNCTIONS
 // =============================================================================
 
-float readMoisture(int zoneIndex) {
-  const ZoneConfig& zone = ZONES[zoneIndex];
-  int raw = analogRead(zone.pin);
-  return rawToPercent(raw, zone.airValue, zone.waterValue);
-}
+float readMoisture() {
+  int raw = analogRead(MOISTURE_PIN);
+  float percent = (float)(AIR_VALUE - raw) / (AIR_VALUE - WATER_VALUE) * 100.0;
 
-float rawToPercent(int raw, int airValue, int waterValue) {
-  float percent = (float)(airValue - raw) / (airValue - waterValue) * 100.0;
-  
   // Clamp to 0-100
   if (percent < 0) percent = 0;
   if (percent > 100) percent = 100;
-  
+
   return percent;
+}
+
+float readLuminosity() {
+  /*
+   * Reads the photoresistor (LDR) through a voltage divider and converts
+   * the analog reading to an approximate lux value.
+   *
+   * Circuit:
+   *   5V ──┤LDR├──┬──┤10kΩ├── GND
+   *                │
+   *               A1 (analog read)
+   *
+   * The LDR resistance decreases with more light.
+   * This approximation assumes a typical GL5528 LDR.
+   */
+  int raw = analogRead(LDR_PIN);
+
+  // Avoid division by zero
+  if (raw == 0) raw = 1;
+
+  // Calculate LDR resistance from voltage divider
+  // V_out = V_in * R_fixed / (R_ldr + R_fixed)
+  // R_ldr = R_fixed * (1023 - raw) / raw
+  float ldrResistance = (float)LDR_RESISTOR_OHMS * (1023.0 - raw) / raw;
+
+  // Approximate lux from resistance (empirical formula for GL5528)
+  // lux ≈ 500000 / R_ldr^1.2 (rough approximation)
+  float lux = 0;
+  if (ldrResistance > 0) {
+    lux = 500000.0 / pow(ldrResistance, 1.2);
+  }
+
+  // Clamp to reasonable range
+  if (lux < 0) lux = 0;
+  if (lux > 100000) lux = 100000;
+
+  return lux;
 }
 
 // =============================================================================
@@ -113,33 +145,27 @@ void sendSensorData() {
   int status = dht20.read();
   float temperature = 20.0;  // Default fallback
   float humidity = 50.0;     // Default fallback
-  
+
   if (status == DHT20_OK) {
     temperature = dht20.getTemperature();
     humidity = dht20.getHumidity();
   }
 
+  // Read sensors
+  float moisture = readMoisture();
+  float lux = readLuminosity();
+
   // Build JSON output
-  Serial.print("{");
-
-  // Zone moisture readings
-  for (int i = 0; i < NUM_ZONES; i++) {
-    Serial.print("\"");
-    Serial.print(ZONES[i].id);
-    Serial.print("\":{\"moisture\":");
-    Serial.print(readMoisture(i), 1);
-    Serial.print("}");
-    
-    if (i < NUM_ZONES - 1) {
-      Serial.print(",");
-    }
-  }
-
-  // Temperature and humidity
-  Serial.print(",\"temp\":");
+  // Format: {"zone_1":{"moisture":45.2,"lux":23500.0},"temp":22.5,"humidity":60.0}
+  Serial.print("{\"");
+  Serial.print(ZONE_ID);
+  Serial.print("\":{\"moisture\":");
+  Serial.print(moisture, 1);
+  Serial.print(",\"lux\":");
+  Serial.print(lux, 1);
+  Serial.print("},\"temp\":");
   Serial.print(temperature, 1);
   Serial.print(",\"humidity\":");
   Serial.print(humidity, 1);
-
   Serial.println("}");
 }

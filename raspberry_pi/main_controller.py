@@ -10,7 +10,7 @@ This script is the entry point that ties together:
     - Plant data (from plant_api module)
     - Decision making (from decision_engine module)
     - Valve control (from valve_controller module)
-    - Telemetry (from telemetry module) â€” sends data to dashboard server
+    - Telemetry (from telemetry module) Ã¢â‚¬â€ sends data to dashboard server
 
 Usage:
     # Production mode (real hardware)
@@ -57,6 +57,7 @@ from decision_engine import (
 from sensor_providers import (
     SensorDataProvider,
     ArduinoSensorProvider,
+    MultiArduinoSensorProvider,
     MockSensorProvider,
 )
 from valve_controller import (
@@ -72,7 +73,7 @@ from config_manager import ConfigManager
 from provisioning import DeviceProvisioner
 from image_sender import ImageSender
 
-# Telemetry â€” sends data to dashboard server
+# Telemetry Ã¢â‚¬â€ sends data to dashboard server
 from telemetry import TelemetrySender
 
 # API modules (optional)
@@ -98,6 +99,10 @@ except ImportError:
 DEFAULT_CONFIG = {
     "location": {"city": "Paris", "elevation_m": 35},
     "tank": {"capacity_liters": 50.0},
+    "arduinos": {
+        "/dev/ttyACM0": "zone_1",
+        "/dev/ttyACM1": "zone_2",
+    },
     "zones": [
         {
             "zone_id": "zone_1",
@@ -109,7 +114,18 @@ DEFAULT_CONFIG = {
             "moisture_threshold_target": 60.0,
             "priority_weight": 1.0,
             "valve_pin": 17,
-        }
+        },
+        {
+            "zone_id": "zone_2",
+            "name": "Zone 2",
+            "plant_id": None,
+            "area_m2": 1.0,
+            "valve_flow_rate_lpm": 2.0,
+            "moisture_threshold_low": 30.0,
+            "moisture_threshold_target": 60.0,
+            "priority_weight": 1.0,
+            "valve_pin": 18,
+        },
     ],
     "server": {
         "ip": None,  # Dashboard server IP (None = read from .env)
@@ -207,7 +223,7 @@ class IrrigationController:
         self.weather_api = weather_api
         self.plant_api = plant_api
 
-        # Telemetry â€” sends data to dashboard
+        # Telemetry Ã¢â‚¬â€ sends data to dashboard
         self.telemetry = None
         self.image_sender = None
 
@@ -251,7 +267,12 @@ class IrrigationController:
             # Map current capabilities
             capabilities = {
                 "sensors": [
-                    {"localName": z.zone_id, "type": "humidity"} for z in self.zones
+                    item
+                    for z in self.zones
+                    for item in [
+                        {"localName": z.zone_id, "type": "humidity"},
+                        {"localName": f"{z.zone_id}_lux", "type": "luminosity"},
+                    ]
                 ],
                 "cameras": ["main_view"],
             }
@@ -278,10 +299,10 @@ class IrrigationController:
             self.image_sender = ImageSender(
                 device_id=device_id, server_ip=server_ip, server_port=server_port
             )
-            self.logger.info(f"âœ“ Communication initialized (DeviceID: {device_id})")
+            self.logger.info(f"Ã¢Å“â€œ Communication initialized (DeviceID: {device_id})")
         else:
             self.logger.warning(
-                "âš  Device ID missing. Telemetry and Image upload will be disabled."
+                "Ã¢Å¡Â  Device ID missing. Telemetry and Image upload will be disabled."
             )
 
     def _setup_logging(self):
@@ -518,7 +539,7 @@ class IrrigationController:
         # Warn if no sensor data received (Arduino disconnected, etc.)
         if not raw_sensors:
             self.logger.warning(
-                "No sensor data received â€” Arduino may be disconnected. "
+                "No sensor data received Ã¢â‚¬â€ Arduino may be disconnected. "
                 "Skipping this cycle."
             )
             now = datetime.now()
@@ -665,7 +686,7 @@ def run_demo_mode(args):
     telemetry = None
     if args.server_ip:
         telemetry = TelemetrySender(server_ip=args.server_ip)
-        print(f"âœ“ Telemetry enabled â†’ {telemetry.url}")
+        print(f"Ã¢Å“â€œ Telemetry enabled Ã¢â€ â€™ {telemetry.url}")
 
     demo = DemoMode(
         scenario=args.scenario, num_zones=args.zones, telemetry_sender=telemetry
@@ -685,12 +706,12 @@ def run_demo_mode(args):
 
                 print(f"Tank: {state['tank']['level_percent']:.0f}%")
                 for zone in state["zones"]:
-                    status = "âš ï¸" if zone["moisture_percent"] < 35 else "âœ“"
+                    status = "Ã¢Å¡Â Ã¯Â¸Â" if zone["moisture_percent"] < 35 else "Ã¢Å“â€œ"
                     print(f"  {zone['name']}: {zone['moisture_percent']:.0f}% {status}")
 
                 if result.should_irrigate:
                     print(
-                        f"â†’ Irrigated {len(result.commands)} zones ({result.total_water_liters:.1f}L)"
+                        f"Ã¢â€ â€™ Irrigated {len(result.commands)} zones ({result.total_water_liters:.1f}L)"
                     )
 
                 demo.simulate_time_passage(hours=4)
@@ -699,7 +720,7 @@ def run_demo_mode(args):
         except KeyboardInterrupt:
             print("\nDemo stopped")
 
-    print("\nâœ“ Demo complete")
+    print("\nÃ¢Å“â€œ Demo complete")
 
 
 def run_tests(args):
@@ -933,16 +954,16 @@ def main():
     if WEATHER_API_AVAILABLE:
         try:
             weather_api = create_weather_api(silent=True)
-            print("âœ“ Weather API initialized")
+            print("Ã¢Å“â€œ Weather API initialized")
         except Exception as e:
-            print(f"âš  Weather API unavailable: {e}")
+            print(f"Ã¢Å¡Â  Weather API unavailable: {e}")
 
     if PLANT_API_AVAILABLE:
         try:
             plant_api = PlantAPI()
-            print("âœ“ Plant API initialized")
+            print("Ã¢Å“â€œ Plant API initialized")
         except Exception as e:
-            print(f"âš  Plant API unavailable: {e}")
+            print(f"Ã¢Å¡Â  Plant API unavailable: {e}")
 
     # Create controller
     zone_ids = [z["zone_id"] for z in config.get("zones", [])]
@@ -950,13 +971,29 @@ def main():
     # In --mock mode, use a mock tank level (80% of capacity)
     # since the real camera-based tank sensor won't be available
     mock_tank = None
+    sensor_provider = None
+
     if args.mock:
         capacity = config.get("tank", {}).get("capacity_liters", 50.0)
         mock_tank = capacity * 0.8
+        sensor_provider = MockSensorProvider(zone_ids)
+    else:
+        # Use multi-Arduino provider (one Arduino per zone)
+        arduino_map = config.get("arduinos", {})
+        if arduino_map:
+            try:
+                sensor_provider = MultiArduinoSensorProvider(port_zone_map=arduino_map)
+                print(f"\u2713 Multi-Arduino provider: {len(arduino_map)} Arduino(s)")
+            except Exception as e:
+                print(f"\u26a0 Multi-Arduino setup failed: {e}")
+                print("  Falling back to mock sensors")
+                sensor_provider = MockSensorProvider(zone_ids)
+                capacity = config.get("tank", {}).get("capacity_liters", 50.0)
+                mock_tank = capacity * 0.8
 
     controller = IrrigationController(
         config=config,
-        sensor_provider=MockSensorProvider(zone_ids) if args.mock else None,
+        sensor_provider=sensor_provider,
         valve_controller=None,
         weather_api=weather_api,
         plant_api=plant_api,
