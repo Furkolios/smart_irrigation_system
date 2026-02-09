@@ -10,7 +10,7 @@ This script is the entry point that ties together:
     - Plant data (from plant_api module)
     - Decision making (from decision_engine module)
     - Valve control (from valve_controller module)
-    - Telemetry (from telemetry module) — sends data to dashboard server
+    - Telemetry (from telemetry module) Ã¢â‚¬â€ sends data to dashboard server
 
 Usage:
     # Production mode (real hardware)
@@ -28,6 +28,11 @@ Usage:
 
     # Specify dashboard server IP
     python main_controller.py --mock --server-ip 192.168.1.50
+
+    # Test hardware components
+    python main_controller.py --test sensors --mock
+    python main_controller.py --test valves --mock
+    python main_controller.py --test both
 """
 
 import os
@@ -52,12 +57,14 @@ from decision_engine import (
 from sensor_providers import (
     SensorDataProvider,
     ArduinoSensorProvider,
+    MultiArduinoSensorProvider,
     MockSensorProvider,
 )
 from valve_controller import (
     ValveController,
     MockValveController,
     create_valve_controller,
+    GPIO_AVAILABLE,
 )
 from tank_sensor import get_tank_level
 
@@ -66,7 +73,7 @@ from config_manager import ConfigManager
 from provisioning import DeviceProvisioner
 from image_sender import ImageSender
 
-# Telemetry — sends data to dashboard server
+# Telemetry Ã¢â‚¬â€ sends data to dashboard server
 from telemetry import TelemetrySender
 
 # API modules (optional)
@@ -92,6 +99,10 @@ except ImportError:
 DEFAULT_CONFIG = {
     "location": {"city": "Paris", "elevation_m": 35},
     "tank": {"capacity_liters": 50.0},
+    "arduinos": {
+        "/dev/ttyACM0": "zone_1",
+        "/dev/ttyACM1": "zone_2",
+    },
     "zones": [
         {
             "zone_id": "zone_1",
@@ -103,7 +114,18 @@ DEFAULT_CONFIG = {
             "moisture_threshold_target": 60.0,
             "priority_weight": 1.0,
             "valve_pin": 17,
-        }
+        },
+        {
+            "zone_id": "zone_2",
+            "name": "Zone 2",
+            "plant_id": None,
+            "area_m2": 1.0,
+            "valve_flow_rate_lpm": 2.0,
+            "moisture_threshold_low": 30.0,
+            "moisture_threshold_target": 60.0,
+            "priority_weight": 1.0,
+            "valve_pin": 18,
+        },
     ],
     "server": {
         "ip": None,  # Dashboard server IP (None = read from .env)
@@ -201,7 +223,7 @@ class IrrigationController:
         self.weather_api = weather_api
         self.plant_api = plant_api
 
-        # Telemetry — sends data to dashboard
+        # Telemetry Ã¢â‚¬â€ sends data to dashboard
         self.telemetry = None
         self.image_sender = None
 
@@ -245,7 +267,12 @@ class IrrigationController:
             # Map current capabilities
             capabilities = {
                 "sensors": [
-                    {"localName": z.zone_id, "type": "humidity"} for z in self.zones
+                    item
+                    for z in self.zones
+                    for item in [
+                        {"localName": z.zone_id, "type": "humidity"},
+                        {"localName": f"{z.zone_id}_lux", "type": "luminosity"},
+                    ]
                 ],
                 "cameras": ["main_view"],
             }
@@ -272,10 +299,10 @@ class IrrigationController:
             self.image_sender = ImageSender(
                 device_id=device_id, server_ip=server_ip, server_port=server_port
             )
-            self.logger.info(f"✓ Communication initialized (DeviceID: {device_id})")
+            self.logger.info(f"Ã¢Å“â€œ Communication initialized (DeviceID: {device_id})")
         else:
             self.logger.warning(
-                "⚠ Device ID missing. Telemetry and Image upload will be disabled."
+                "Ã¢Å¡Â  Device ID missing. Telemetry and Image upload will be disabled."
             )
 
     def _setup_logging(self):
@@ -512,7 +539,7 @@ class IrrigationController:
         # Warn if no sensor data received (Arduino disconnected, etc.)
         if not raw_sensors:
             self.logger.warning(
-                "No sensor data received — Arduino may be disconnected. "
+                "No sensor data received Ã¢â‚¬â€ Arduino may be disconnected. "
                 "Skipping this cycle."
             )
             now = datetime.now()
@@ -659,7 +686,7 @@ def run_demo_mode(args):
     telemetry = None
     if args.server_ip:
         telemetry = TelemetrySender(server_ip=args.server_ip)
-        print(f"✓ Telemetry enabled → {telemetry.url}")
+        print(f"Ã¢Å“â€œ Telemetry enabled Ã¢â€ â€™ {telemetry.url}")
 
     demo = DemoMode(
         scenario=args.scenario, num_zones=args.zones, telemetry_sender=telemetry
@@ -679,12 +706,12 @@ def run_demo_mode(args):
 
                 print(f"Tank: {state['tank']['level_percent']:.0f}%")
                 for zone in state["zones"]:
-                    status = "⚠️" if zone["moisture_percent"] < 35 else "✓"
+                    status = "Ã¢Å¡Â Ã¯Â¸Â" if zone["moisture_percent"] < 35 else "Ã¢Å“â€œ"
                     print(f"  {zone['name']}: {zone['moisture_percent']:.0f}% {status}")
 
                 if result.should_irrigate:
                     print(
-                        f"→ Irrigated {len(result.commands)} zones ({result.total_water_liters:.1f}L)"
+                        f"Ã¢â€ â€™ Irrigated {len(result.commands)} zones ({result.total_water_liters:.1f}L)"
                     )
 
                 demo.simulate_time_passage(hours=4)
@@ -693,7 +720,177 @@ def run_demo_mode(args):
         except KeyboardInterrupt:
             print("\nDemo stopped")
 
-    print("\n✓ Demo complete")
+    print("\nÃ¢Å“â€œ Demo complete")
+
+
+def run_tests(args):
+    """
+    Test individual hardware components (sensors and/or valves).
+
+    Sensor tests also send telemetry if the device is provisioned.
+
+    Usage:
+        python main_controller.py --test sensors --mock
+        python main_controller.py --test valves --mock
+        python main_controller.py --test both --mock
+    """
+    config = load_config(args.config)
+    zone_configs = config.get("zones", [])
+
+    print("\n" + "=" * 60)
+    print("SMART IRRIGATION - TEST MODE")
+    print(f"Testing: {args.test.upper()}")
+    print("=" * 60)
+
+    # Build telemetry sender for sensor tests (reuses provisioning data)
+    telemetry = None
+    if args.test in ("sensors", "both") and not args.no_telemetry:
+        telemetry = _build_telemetry(config, args.server_ip)
+
+    if args.test in ("sensors", "both"):
+        _test_sensors(zone_configs, use_mock=args.mock, telemetry=telemetry)
+
+    if args.test in ("valves", "both"):
+        _test_valves(zone_configs, use_mock=args.mock)
+
+    print("\n" + "=" * 60)
+    print("Tests complete")
+    print("=" * 60)
+
+
+def _build_telemetry(
+    config: Dict[str, Any], cli_server_ip: Optional[str] = None
+) -> Optional[TelemetrySender]:
+    """
+    Create a TelemetrySender from provisioning data if available.
+
+    Returns None (with a message) if the device hasn't been provisioned yet.
+    """
+    internal_config = ConfigManager()
+    if not internal_config.is_provisioned():
+        print("[Telemetry] Device not provisioned - telemetry disabled")
+        print("[Telemetry] Run the system normally first to provision, or use --no-telemetry")
+        return None
+
+    server_config = config.get("server", {})
+    server_ip = cli_server_ip or server_config.get("ip") or os.getenv(
+        "DASHBOARD_SERVER_IP", "127.0.0.1"
+    )
+    server_port = server_config.get("port", 8000)
+
+    try:
+        sender = TelemetrySender(
+            device_id=internal_config.device_id,
+            sensor_map=internal_config.sensor_map,
+            server_ip=server_ip,
+            server_port=server_port,
+        )
+        print(f"[Telemetry] Enabled -> {sender.telemetry_url}")
+        return sender
+    except Exception as e:
+        print(f"[Telemetry] Setup failed: {e}")
+        return None
+
+
+def _test_sensors(
+    zone_configs: list,
+    use_mock: bool = False,
+    telemetry: Optional[TelemetrySender] = None,
+):
+    """Read and display sensor data for all zones, optionally sending telemetry."""
+    zone_ids = [z["zone_id"] for z in zone_configs]
+
+    if use_mock:
+        provider = MockSensorProvider(zone_ids)
+        print("\n[Sensors] Using MOCK provider")
+    else:
+        try:
+            provider = ArduinoSensorProvider()
+            print("\n[Sensors] Using REAL Arduino connection")
+        except Exception as e:
+            print(f"\n[Sensors] Cannot connect to Arduino: {e}")
+            print("[Sensors] Tip: use --mock to test without hardware")
+            return
+
+    print(f"[Sensors] Reading {len(zone_ids)} zone(s)...\n")
+
+    try:
+        for i in range(3):
+            readings = provider.get_sensor_readings()
+
+            if not readings:
+                print(f"  Reading {i + 1}: No data received")
+            else:
+                print(f"  Reading {i + 1}:")
+                for zone_id, data in sorted(readings.items()):
+                    name = next(
+                        (z.get("name", zone_id) for z in zone_configs if z["zone_id"] == zone_id),
+                        zone_id,
+                    )
+                    print(
+                        f"    {name}: "
+                        f"moisture={data['soil_moisture_percent']:.1f}% | "
+                        f"temp={data['temperature_c']:.1f}C | "
+                        f"humidity={data['humidity_percent']:.1f}%"
+                    )
+
+                if telemetry:
+                    ok = telemetry.send_telemetry(readings, print_to_console=False)
+                    tag = "sent" if ok else "FAILED"
+                    print(f"    [Telemetry] {tag}")
+
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print("\n  Sensor test interrupted")
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+
+    print("\n[Sensors] Done")
+
+
+def _test_valves(zone_configs: list, use_mock: bool = False, duration: float = 3.0):
+    """Open each valve briefly to verify operation."""
+    zone_pins = {
+        z["zone_id"]: z["valve_pin"]
+        for z in zone_configs
+        if "valve_pin" in z
+    }
+
+    if not zone_pins:
+        print("\n[Valves] No valve pins configured - skipping")
+        return
+
+    try:
+        controller = create_valve_controller(zone_pins, use_mock=use_mock)
+    except Exception as e:
+        print(f"\n[Valves] Cannot initialize valve controller: {e}")
+        print("[Valves] Tip: use --mock to test without hardware")
+        return
+
+    label = "MOCK" if use_mock or not GPIO_AVAILABLE else "REAL GPIO"
+    print(f"\n[Valves] Using {label} controller")
+    print(f"[Valves] Testing {len(zone_pins)} valve(s), {duration:.0f}s each...\n")
+
+    try:
+        for zone_id, pin in zone_pins.items():
+            name = next(
+                (z.get("name", zone_id) for z in zone_configs if z["zone_id"] == zone_id),
+                zone_id,
+            )
+            print(f"  {name} (GPIO {pin}): opening...", end="", flush=True)
+            controller.open_valve(zone_id)
+            time.sleep(duration)
+            controller.close_valve(zone_id)
+            print(" closed")
+
+    except KeyboardInterrupt:
+        print("\n  Valve test interrupted - closing all valves")
+    finally:
+        controller.cleanup()
+
+    print("\n[Valves] Done")
 
 
 def main():
@@ -705,6 +902,13 @@ def main():
     parser.add_argument("--status", action="store_true", help="Print status")
     parser.add_argument("--mock", action="store_true", help="Use mock sensors")
     parser.add_argument("--demo", action="store_true", help="Run demo mode")
+    parser.add_argument(
+        "--test",
+        type=str,
+        default=None,
+        choices=["sensors", "valves", "both"],
+        help="Test hardware components (sensors/valves/both)",
+    )
     parser.add_argument(
         "--scenario",
         type=str,
@@ -729,6 +933,11 @@ def main():
         run_demo_mode(args)
         return
 
+    # Test mode
+    if args.test:
+        run_tests(args)
+        return
+
     # Load config
     config = load_config(args.config)
 
@@ -745,16 +954,16 @@ def main():
     if WEATHER_API_AVAILABLE:
         try:
             weather_api = create_weather_api(silent=True)
-            print("✓ Weather API initialized")
+            print("Ã¢Å“â€œ Weather API initialized")
         except Exception as e:
-            print(f"⚠ Weather API unavailable: {e}")
+            print(f"Ã¢Å¡Â  Weather API unavailable: {e}")
 
     if PLANT_API_AVAILABLE:
         try:
             plant_api = PlantAPI()
-            print("✓ Plant API initialized")
+            print("Ã¢Å“â€œ Plant API initialized")
         except Exception as e:
-            print(f"⚠ Plant API unavailable: {e}")
+            print(f"Ã¢Å¡Â  Plant API unavailable: {e}")
 
     # Create controller
     zone_ids = [z["zone_id"] for z in config.get("zones", [])]
@@ -762,13 +971,29 @@ def main():
     # In --mock mode, use a mock tank level (80% of capacity)
     # since the real camera-based tank sensor won't be available
     mock_tank = None
+    sensor_provider = None
+
     if args.mock:
         capacity = config.get("tank", {}).get("capacity_liters", 50.0)
         mock_tank = capacity * 0.8
+        sensor_provider = MockSensorProvider(zone_ids)
+    else:
+        # Use multi-Arduino provider (one Arduino per zone)
+        arduino_map = config.get("arduinos", {})
+        if arduino_map:
+            try:
+                sensor_provider = MultiArduinoSensorProvider(port_zone_map=arduino_map)
+                print(f"\u2713 Multi-Arduino provider: {len(arduino_map)} Arduino(s)")
+            except Exception as e:
+                print(f"\u26a0 Multi-Arduino setup failed: {e}")
+                print("  Falling back to mock sensors")
+                sensor_provider = MockSensorProvider(zone_ids)
+                capacity = config.get("tank", {}).get("capacity_liters", 50.0)
+                mock_tank = capacity * 0.8
 
     controller = IrrigationController(
         config=config,
-        sensor_provider=MockSensorProvider(zone_ids) if args.mock else None,
+        sensor_provider=sensor_provider,
         valve_controller=None,
         weather_api=weather_api,
         plant_api=plant_api,

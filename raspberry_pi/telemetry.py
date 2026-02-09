@@ -84,18 +84,26 @@ class TelemetrySender:
                 self._logger.warning(f"No sensorId found for localName: {local_name}")
                 continue
 
-            # In the current system, we send the primary value (moisture)
-            # but we could expand this to send all sub-readings if needed.
-            # Assuming 'soil_moisture_percent' is the primary 'value'.
+            # Send the primary value (moisture) as the main reading
             value = values.get("soil_moisture_percent")
             if value is not None:
-                readings.append(
-                    {
-                        "sensorId": sensor_id,
-                        "value": round(float(value), 2),
-                        "readingAt": now_iso,
-                    }
-                )
+                reading = {
+                    "sensorId": sensor_id,
+                    "value": round(float(value), 2),
+                    "readingAt": now_iso,
+                }
+
+                # Attach additional sensor data as metadata
+                # These are forwarded to the server but not used in
+                # local decision logic (e.g. luminosity)
+                extra = {}
+                for key in ("temperature_c", "humidity_percent", "luminosity_lux"):
+                    if key in values and values[key] is not None:
+                        extra[key] = round(float(values[key]), 2)
+                if extra:
+                    reading["metadata"] = extra
+
+                readings.append(reading)
 
         payload = {"sentAt": now_iso, "readings": readings}
 
