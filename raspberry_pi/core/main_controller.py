@@ -45,7 +45,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 # Core modules
-from decision_engine import (
+from water.decision_engine import (
     IrrigationDecisionEngine,
     ZoneConfig,
     SensorReading,
@@ -54,38 +54,38 @@ from decision_engine import (
 )
 
 # Hardware interfaces
-from sensor_providers import (
+from sensors.sensor_providers import (
     SensorDataProvider,
     ArduinoSensorProvider,
     MultiArduinoSensorProvider,
     MockSensorProvider,
 )
-from valve_controller import (
+from water.valve_controller import (
     ValveController,
     MockValveController,
     create_valve_controller,
     GPIO_AVAILABLE,
 )
-from tank_sensor import get_tank_level
+from sensors.tank_sensor import get_tank_level
 
 # New communication modules
-from config_manager import ConfigManager
-from provisioning import DeviceProvisioner
-from image_sender import ImageSender
+from config.config_manager import ConfigManager
+from config.provisioning import DeviceProvisioner
+from images.image_sender import ImageSender
 
-# Telemetry Ã¢â‚¬â€ sends data to dashboard server
-from telemetry import TelemetrySender
+# Telemetry â€” sends data to dashboard server
+from api.telemetry import TelemetrySender
 
 # API modules (optional)
 try:
-    from weather_api import WeatherAPI, create_api as create_weather_api
+    from api.weather_api import WeatherAPI, create_api as create_weather_api
 
     WEATHER_API_AVAILABLE = True
 except ImportError:
     WEATHER_API_AVAILABLE = False
 
 try:
-    from plant_api import PlantAPI
+    from api.plant_api import PlantAPI
 
     PLANT_API_AVAILABLE = True
 except ImportError:
@@ -299,7 +299,9 @@ class IrrigationController:
             self.image_sender = ImageSender(
                 device_id=device_id, server_ip=server_ip, server_port=server_port
             )
-            self.logger.info(f"Ã¢Å“â€œ Communication initialized (DeviceID: {device_id})")
+            self.logger.info(
+                f"Ã¢Å“â€œ Communication initialized (DeviceID: {device_id})"
+            )
         else:
             self.logger.warning(
                 "Ã¢Å¡Â  Device ID missing. Telemetry and Image upload will be disabled."
@@ -499,14 +501,14 @@ class IrrigationController:
         # We can't easily 'steal' the frame from tank_sensor.py without changes,
         # but we can try to use its logic if we import its internal components
         # or just capture a new one if CAMERA_AVAILABLE.
-        from tank_sensor import CAMERA_AVAILABLE
+        from sensors.tank_sensor import CAMERA_AVAILABLE
 
         if not CAMERA_AVAILABLE:
             return
 
         try:
             import cv2
-            from tank_sensor import _picam2, _initialize_camera
+            from sensors.tank_sensor import _picam2, _initialize_camera
 
             _initialize_camera()
 
@@ -675,7 +677,7 @@ class IrrigationController:
 
 def run_demo_mode(args):
     """Run in demo mode using the demo module."""
-    from demo_mode import DemoMode
+    from core.demo_mode import DemoMode
 
     print("\n" + "=" * 60)
     print("SMART IRRIGATION - DEMO MODE")
@@ -706,7 +708,9 @@ def run_demo_mode(args):
 
                 print(f"Tank: {state['tank']['level_percent']:.0f}%")
                 for zone in state["zones"]:
-                    status = "Ã¢Å¡Â Ã¯Â¸Â" if zone["moisture_percent"] < 35 else "Ã¢Å“â€œ"
+                    status = (
+                        "Ã¢Å¡Â Ã¯Â¸Â" if zone["moisture_percent"] < 35 else "Ã¢Å“â€œ"
+                    )
                     print(f"  {zone['name']}: {zone['moisture_percent']:.0f}% {status}")
 
                 if result.should_irrigate:
@@ -769,12 +773,16 @@ def _build_telemetry(
     internal_config = ConfigManager()
     if not internal_config.is_provisioned():
         print("[Telemetry] Device not provisioned - telemetry disabled")
-        print("[Telemetry] Run the system normally first to provision, or use --no-telemetry")
+        print(
+            "[Telemetry] Run the system normally first to provision, or use --no-telemetry"
+        )
         return None
 
     server_config = config.get("server", {})
-    server_ip = cli_server_ip or server_config.get("ip") or os.getenv(
-        "DASHBOARD_SERVER_IP", "127.0.0.1"
+    server_ip = (
+        cli_server_ip
+        or server_config.get("ip")
+        or os.getenv("DASHBOARD_SERVER_IP", "127.0.0.1")
     )
     server_port = server_config.get("port", 8000)
 
@@ -824,7 +832,11 @@ def _test_sensors(
                 print(f"  Reading {i + 1}:")
                 for zone_id, data in sorted(readings.items()):
                     name = next(
-                        (z.get("name", zone_id) for z in zone_configs if z["zone_id"] == zone_id),
+                        (
+                            z.get("name", zone_id)
+                            for z in zone_configs
+                            if z["zone_id"] == zone_id
+                        ),
                         zone_id,
                     )
                     print(
@@ -852,11 +864,7 @@ def _test_sensors(
 
 def _test_valves(zone_configs: list, use_mock: bool = False, duration: float = 3.0):
     """Open each valve briefly to verify operation."""
-    zone_pins = {
-        z["zone_id"]: z["valve_pin"]
-        for z in zone_configs
-        if "valve_pin" in z
-    }
+    zone_pins = {z["zone_id"]: z["valve_pin"] for z in zone_configs if "valve_pin" in z}
 
     if not zone_pins:
         print("\n[Valves] No valve pins configured - skipping")
@@ -876,7 +884,11 @@ def _test_valves(zone_configs: list, use_mock: bool = False, duration: float = 3
     try:
         for zone_id, pin in zone_pins.items():
             name = next(
-                (z.get("name", zone_id) for z in zone_configs if z["zone_id"] == zone_id),
+                (
+                    z.get("name", zone_id)
+                    for z in zone_configs
+                    if z["zone_id"] == zone_id
+                ),
                 zone_id,
             )
             print(f"  {name} (GPIO {pin}): opening...", end="", flush=True)
