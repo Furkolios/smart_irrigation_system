@@ -1,51 +1,56 @@
+import pytest
+from pathlib import Path
 from raspberry_pi.config.config_manager import ConfigManager
-from raspberry_pi.config.provisioning import DeviceProvisioner
-from unittest.mock import patch, MagicMock
+from raspberry_pi.config.models import SystemConfig, SystemMode
 
 
-def test_config_manager_provisioning_state(tmp_path):
-    # Use a temporary file for config
-    config_file = str(tmp_path / "device_config.json")
+def test_config_manager_load_defaults(tmp_path):
+    # Non-existent file should load defaults
+    config_file = tmp_path / "non_existent.yaml"
+    manager = ConfigManager(config_path=str(config_file))
 
-    manager = ConfigManager(config_file=config_file)
-    assert manager.is_provisioned() is False
-
-    # Simulate provisioning update
-    provision_data = {
-        "deviceId": "test-uuid",
-        "sensors": [
-            {"sensorId": "s1", "localName": "zone_1"},
-            {"sensorId": "s2", "localName": "zone_2"},
-        ],
-    }
-    manager.update_from_provisioning(provision_data)
-
-    assert manager.is_provisioned() is True
-    assert manager.device_id == "test-uuid"
-    assert manager.sensor_map["zone_1"] == "s1"
+    assert isinstance(manager.config, SystemConfig)
+    assert manager.config.system_mode == SystemMode.MAIN
+    # Check default irrigation setting
+    assert manager.config.irrigation.loop_interval_seconds == 60
 
 
-def test_device_provisioner_hardware_id():
-    provisioner = DeviceProvisioner(server_ip="127.0.0.1")
-    hw_id = provisioner.get_hardware_id()
+def test_config_manager_load_valid_file(tmp_path):
+    config_file = tmp_path / "test_config.yaml"
+    yaml_content = """
+    system_mode: "test"
+    irrigation:
+      loop_interval_seconds: 120
+    """
+    config_file.write_text(yaml_content)
 
-    # MAC address format check (6 groups of 2 hex digits)
-    assert len(hw_id.split(":")) == 6
-    for group in hw_id.split(":"):
-        assert len(group) == 2
-        int(group, 16)  # Should not raise ValueError
+    manager = ConfigManager(config_path=str(config_file))
+    assert manager.config.system_mode == SystemMode.TEST
+    assert manager.config.irrigation.loop_interval_seconds == 120
 
 
-@patch("requests.post")
-def test_device_provisioner_success(mock_post):
-    # Setup mock response
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"deviceId": "new-id", "sensors": []}
-    mock_post.return_value = mock_response
+def test_config_manager_save(tmp_path):
+    config_file = tmp_path / "save_config.yaml"
+    manager = ConfigManager(config_path=str(config_file))
 
-    provisioner = DeviceProvisioner(server_ip="127.0.0.1")
-    result = provisioner.provision({"sensors": []})
+    # Modify and save
+    manager.config.system_mode = SystemMode.DEMO
+    manager.save_config()
 
-    assert result["deviceId"] == "new-id"
-    mock_post.assert_called_once()
+    # Reload
+    new_manager = ConfigManager(config_path=str(config_file))
+    assert new_manager.config.system_mode == SystemMode.DEMO
+
+
+def test_config_manager_update_server(tmp_path):
+    config_file = tmp_path / "server_config.yaml"
+    manager = ConfigManager(config_path=str(config_file))
+
+    manager.update_server_config(device_id="new-uuid", base_url="http://test.com")
+
+    assert manager.config.server.device_id == "new-uuid"
+    assert manager.config.server.base_url == "http://test.com"
+
+    # Verify persistence
+    new_manager = ConfigManager(config_path=str(config_file))
+    assert new_manager.config.server.device_id == "new-uuid"
