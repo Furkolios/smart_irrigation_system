@@ -506,6 +506,57 @@ def create_demo(
     return DemoMode(scenario=scenario, num_zones=num_zones, telemetry_sender=telemetry)
 
 
+def run_demo_mode(args):
+    """Run in demo mode using the demo module."""
+    import json
+    import time
+
+    print("\n" + "=" * 60)
+    print("SMART IRRIGATION - DEMO MODE")
+    print(f"Scenario: {args.scenario.upper()}")
+    print("=" * 60)
+
+    # Setup telemetry for demo mode if server IP provided
+    telemetry = None
+    if getattr(args, "server_ip", None):
+        telemetry = TelemetrySender(server_ip=args.server_ip)
+        print(f"✓ Telemetry enabled -> {telemetry.telemetry_url}")
+
+    demo = DemoMode(
+        scenario=args.scenario, num_zones=args.zones, telemetry_sender=telemetry
+    )
+
+    if args.once:
+        result = demo.run_cycle()
+        state = demo.get_state()
+        print(json.dumps(state, indent=2))
+    else:
+        print("\nRunning demo cycles (Ctrl+C to stop)...")
+        try:
+            for i in range(10):
+                print(f"\n--- Cycle {i + 1} ---")
+                result = demo.run_cycle()
+                state = demo.get_state()
+
+                print(f"Tank: {state['tank']['level_percent']:.0f}%")
+                for zone in state["zones"]:
+                    status = "⚠️ " if zone["moisture_percent"] < 35 else "✓"
+                    print(f"  {zone['name']}: {zone['moisture_percent']:.0f}% {status}")
+
+                if result.should_irrigate:
+                    print(
+                        f"-> Irrigated {len(result.commands)} zones ({result.total_water_liters:.1f}L)"
+                    )
+
+                demo.simulate_time_passage(hours=4)
+                time.sleep(2)
+
+        except KeyboardInterrupt:
+            print("\nDemo stopped")
+
+    print("\n✓ Demo complete")
+
+
 def quick_demo_cycle(
     scenario: str = "normal", server_ip: Optional[str] = None
 ) -> Dict[str, Any]:

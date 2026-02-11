@@ -1,13 +1,8 @@
-import os
 import sys
 import json
 import argparse
 import logging
 from pathlib import Path
-
-# =============================================================================
-# VIRTUAL ENVIRONMENT CHECK
-# =============================================================================
 
 
 def check_venv():
@@ -15,9 +10,7 @@ def check_venv():
     is_venv = sys.prefix != sys.base_prefix
     # Also check if venv directory exists in the project root
     root_path = Path(__file__).parent.parent
-    venv_exists = (root_path / "venv").exists()
-
-    if not is_venv:
+    if not is_venv and not (root_path / "venv").exists():
         print("\n" + "!" * 60)
         print("ERROR: Virtual environment not active.")
         print("-" * 60)
@@ -40,11 +33,9 @@ sys.path.append(str(Path(__file__).parent))
 from core.main_controller import (
     IrrigationController,
     load_config,
-    run_demo_mode,
-    run_tests,
-    WEATHER_API_AVAILABLE,
-    PLANT_API_AVAILABLE,
 )
+from core.demo_mode import run_demo_mode
+from tools.test_hardware import run_tests
 
 # Optional API imports
 try:
