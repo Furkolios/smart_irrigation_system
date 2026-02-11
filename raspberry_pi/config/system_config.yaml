@@ -1,0 +1,54 @@
+system_mode: main
+
+hardware:
+  max_arduinos: 2
+  max_cameras: 2
+
+  global_arduino_config:
+    baud_rate: 9600
+    timeout: 5.0
+
+  cameras:
+    - role: "tank"
+      resolution: [640, 480]
+      # device_path: "/dev/video0" # Optional: auto-detect if missing
+
+    - role: "plant"
+      resolution: [1280, 720]
+      # device_path: "/dev/video1"
+
+  valves:
+    - zone_id: "zone_1"
+      name: "Tomatoes"
+      pin: 17
+      flow_rate_lpm: 2.5
+
+    - zone_id: "zone_2"
+      name: "Basil"
+      pin: 27
+      flow_rate_lpm: 1.5
+
+server:
+  enabled: true
+  base_url: "http://192.168.1.100:8000"
+  telemetry_interval_seconds: 60
+  image_interval_seconds: 3600
+  heartbeat_interval_seconds: 30
+  retry_policy:
+    max_retries: 3
+    backoff_factor: 2.0
+
+irrigation:
+  loop_interval_seconds: 60
+  default_moisture_threshold: 40.0
+  default_water_amount_liters: 2.0
+
+logging:
+  level: INFO
+  file_path: "smart_irrigation.log"
+  max_size_mb: 10
+  backup_count: 5
+
+location:
+  city: "Madrid"
+  elevation_m: 650

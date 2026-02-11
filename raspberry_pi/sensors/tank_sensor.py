@@ -18,6 +18,7 @@ try:
     import numpy as np
     from picamera2 import Picamera2
     import time
+
     CAMERA_AVAILABLE = True
 except ImportError:
     CAMERA_AVAILABLE = False
@@ -56,15 +57,16 @@ if CAMERA_AVAILABLE:
 # HELPER FUNCTIONS
 # -----------------------
 
+
 def _load_calibration():
     """Load calibration from file"""
     global _ROI, _Y_EMPTY, _Y_FULL
     try:
-        with open('calibration.json', 'r') as f:
+        with open("calibration.json", "r") as f:
             config = json.load(f)
-            _ROI = tuple(config['ROI']) if config['ROI'] else None
-            _Y_EMPTY = config['Y_EMPTY']
-            _Y_FULL = config['Y_FULL']
+            _ROI = tuple(config["ROI"]) if config["ROI"] else None
+            _Y_EMPTY = config["Y_EMPTY"]
+            _Y_FULL = config["Y_FULL"]
         return True
     except FileNotFoundError:
         print("Warning: No calibration file found. Using default values.")
@@ -76,7 +78,7 @@ def _clamp(x, a, b):
 
 
 def _compute_level_percent(cy, y_empty, y_full):
-    denom = (y_empty - y_full)
+    denom = y_empty - y_full
     if abs(denom) < 1e-6:
         return None
     level = (y_empty - cy) / denom
@@ -88,7 +90,7 @@ def _detect_red_floater(frame_bgr):
     """Detect red floater in frame"""
     if _ROI is not None:
         x0, y0, w, h = _ROI
-        img = frame_bgr[y0:y0+h, x0:x0+w]
+        img = frame_bgr[y0 : y0 + h, x0 : x0 + w]
     else:
         x0, y0 = 0, 0
         img = frame_bgr
@@ -112,7 +114,7 @@ def _detect_red_floater(frame_bgr):
     best_area = 0
     for c in contours:
         area = cv2.contourArea(c)
-        if area < MIN_AREA * (RESIZE_FACTOR ** 2):
+        if area < MIN_AREA * (RESIZE_FACTOR**2):
             continue
         if area > best_area:
             best_area = area
@@ -129,10 +131,14 @@ def _detect_red_floater(frame_bgr):
     cy = int((M["m01"] / M["m00"]) * scale_back) + y0
 
     x, y, w, h = cv2.boundingRect(best)
-    bbox = (int(x * scale_back) + x0, int(y * scale_back) + y0,
-            int(w * scale_back), int(h * scale_back))
+    bbox = (
+        int(x * scale_back) + x0,
+        int(y * scale_back) + y0,
+        int(w * scale_back),
+        int(h * scale_back),
+    )
 
-    return (cx, cy, bbox, best_area / (RESIZE_FACTOR ** 2))
+    return (cx, cy, bbox, best_area / (RESIZE_FACTOR**2))
 
 
 def _initialize_camera():
@@ -141,10 +147,13 @@ def _initialize_camera():
     if _picam2 is None:
         _load_calibration()
         _picam2 = Picamera2()
-        config = _picam2.create_preview_configuration(main={"format": "RGB888", "size": (1280, 720)})
+        config = _picam2.create_preview_configuration(
+            main={"format": "RGB888", "size": (1280, 720)}
+        )
         _picam2.configure(config)
         _picam2.start()
         import time
+
         time.sleep(0.5)
 
 
@@ -152,14 +161,15 @@ def _initialize_camera():
 # PUBLIC API
 # -----------------------
 
+
 def get_tank_level() -> float:
     """
     Get current tank water level in liters.
-    
+
     Returns:
         float: Water level in liters (0 to TANK_CAPACITY_LITERS).
                Returns 0.0 if camera is not available or floater cannot be detected.
-    
+
     Note:
         Uses camera-based red floater detection with calibrated boundaries.
         First call initializes the camera (may take ~0.5 seconds).
@@ -172,29 +182,29 @@ def get_tank_level() -> float:
 
     try:
         _initialize_camera()
-        
+
         frame_rgb = _picam2.capture_array()
         frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        
+
         det = _detect_red_floater(frame)
-        
+
         if det is None:
             return 0.0
-        
+
         cx, cy, bbox, area = det
-        
+
         if _last_cy is None or abs(cy - _last_cy) <= MAX_JUMP:
             _cy_hist.append(cy)
             _last_cy = cy
-        
+
         if len(_cy_hist) > 0:
             cy_smooth = float(np.median(np.array(_cy_hist)))
             level_percent = _compute_level_percent(cy_smooth, _Y_EMPTY, _Y_FULL)
-            
+
             if level_percent is not None:
                 liters = (level_percent / 100.0) * TANK_CAPACITY_LITERS
                 return liters
-        
+
         return 0.0
 
     except Exception as e:
@@ -213,17 +223,20 @@ def cleanup():
 
 if __name__ == "__main__":
     if not CAMERA_AVAILABLE:
-        print("Camera not available — tank_sensor requires Raspberry Pi with picamera2 and cv2.")
+        print(
+            "Camera not available — tank_sensor requires Raspberry Pi with picamera2 and cv2."
+        )
         print("In --mock mode, use mock_tank_level parameter instead.")
     else:
         import time
+
         print("Tank Sensor Test")
         print("=" * 30)
         try:
             for i in range(5):
                 level = get_tank_level()
                 percent = (level / TANK_CAPACITY_LITERS) * 100
-                print(f"  Reading {i+1}: {level:.1f} liters ({percent:.1f}%)")
+                print(f"  Reading {i + 1}: {level:.1f} liters ({percent:.1f}%)")
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nTest interrupted")
