@@ -30,7 +30,7 @@ hardware:
 
 server:
   enabled: true
-  base_url: "http://192.168.1.100:8000"
+  base_url: "http://172.16.16.113:8000"
   telemetry_interval_seconds: 60
   image_interval_seconds: 3600
   heartbeat_interval_seconds: 30
