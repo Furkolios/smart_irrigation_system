@@ -74,30 +74,54 @@ class TelemetryManager:
         now_iso = datetime.now().isoformat()
         readings = []
 
-        for local_name, values in (sensor_data or {}).items():
-            sensor_id = (self.config.sensor_map or {}).get(local_name)
-            if not sensor_id:
-                self.logger.warning(f"No sensorId found for localName: {local_name}")
-                continue
+        # External devices guide requires: sensorId, type, value, unit (and optionally readingAt)
+        # We send one or more readings per zone depending on what is mapped in `server.sensor_map`.
+        for zone_id, values in (sensor_data or {}).items():
+            # 1) Soil moisture (represented as humidity %; sensorId must exist server-side)
+            soil_sensor_id = (self.config.sensor_map or {}).get(zone_id)
+            soil_value = (values or {}).get("soil_moisture_percent")
+            if soil_sensor_id and soil_value is not None:
+                readings.append(
+                    {
+                        "sensorId": soil_sensor_id,
+                        "type": "humidity",
+                        "value": round(float(soil_value), 2),
+                        "unit": "%",
+                        "readingAt": now_iso,
+                    }
+                )
+            elif soil_value is not None:
+                self.logger.warning(f"No sensorId found for localName: {zone_id}")
 
-            value = values.get("soil_moisture_percent")
-            if value is None:
-                continue
+            # 2) Temperature (optional)
+            temp_local = f"{zone_id}_temperature"
+            temp_sensor_id = (self.config.sensor_map or {}).get(temp_local)
+            temp_value = (values or {}).get("temperature_c")
+            if temp_sensor_id and temp_value is not None:
+                readings.append(
+                    {
+                        "sensorId": temp_sensor_id,
+                        "type": "temperature",
+                        "value": round(float(temp_value), 2),
+                        "unit": "C",
+                        "readingAt": now_iso,
+                    }
+                )
 
-            reading: Dict[str, Any] = {
-                "sensorId": sensor_id,
-                "value": round(float(value), 2),
-                "readingAt": now_iso,
-            }
-
-            extra = {}
-            for key in ("temperature_c", "humidity_percent", "luminosity_lux"):
-                if key in values and values[key] is not None:
-                    extra[key] = round(float(values[key]), 2)
-            if extra:
-                reading["metadata"] = extra
-
-            readings.append(reading)
+            # 3) Air humidity (optional) — kept separate from soil moisture via sensorId/localName
+            hum_local = f"{zone_id}_humidity"
+            hum_sensor_id = (self.config.sensor_map or {}).get(hum_local)
+            hum_value = (values or {}).get("humidity_percent")
+            if hum_sensor_id and hum_value is not None:
+                readings.append(
+                    {
+                        "sensorId": hum_sensor_id,
+                        "type": "humidity",
+                        "value": round(float(hum_value), 2),
+                        "unit": "%",
+                        "readingAt": now_iso,
+                    }
+                )
 
         payload = {
             "type": "telemetry",
@@ -212,15 +236,16 @@ class TelemetryManager:
 
                 url = f"{self._device_base()}/images"
                 data = {
-                    "image_type": payload.get("image_type") or "general",
+                    # Must match `docs/external-devices.md` form fields
+                    "type": payload.get("image_type") or "general",
                     "captured_at": payload.get("captured_at") or datetime.now().isoformat(),
                 }
                 metadata = payload.get("metadata") or {}
                 if metadata:
-                    data["metadata_json"] = json.dumps(metadata)
+                    data["metadata"] = json.dumps(metadata)
 
                 with open(image_path, "rb") as f:
-                    files = {"image_file": (os.path.basename(image_path), f, "image/jpeg")}
+                    files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
                     resp = requests.post(url, files=files, data=data, timeout=15)
                     ok = resp.status_code in (200, 201, 202)
 

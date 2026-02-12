@@ -373,6 +373,15 @@ class SystemOrchestrator:
                 {"localName": v.zone_id, "type": "humidity"}
                 for v in self.config.hardware.valves
             ]
+            # Optional extra sensors per zone (sent only if server provisions + maps them)
+            sensors += [
+                {"localName": f"{v.zone_id}_temperature", "type": "temperature"}
+                for v in self.config.hardware.valves
+            ]
+            sensors += [
+                {"localName": f"{v.zone_id}_humidity", "type": "humidity"}
+                for v in self.config.hardware.valves
+            ]
             cameras = [c.role for c in self.config.hardware.cameras if c.enabled]
             capabilities = {"sensors": sensors, "cameras": cameras}
 
