@@ -56,3 +56,4 @@ def test_arduino_sensor_provider_parsing(mock_serial_class):
     assert readings["zone_1"]["soil_moisture_percent"] == 45.0
     assert readings["zone_1"]["temperature_c"] == 22.5
     assert readings["zone_1"]["humidity_percent"] == 60.0
+    assert readings["zone_1"]["luminosity_lux"] == 15000
