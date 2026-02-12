@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Queue, Empty
 from threading import Thread
 from typing import Dict, Any, Optional
@@ -60,6 +60,19 @@ class TelemetryManager:
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
 
+    @staticmethod
+    def _iso_utc_now() -> str:
+        """
+        Backend examples use ISO-8601 with 'Z' (UTC).
+        Using timezone-aware UTC avoids 422s with strict datetime validators.
+        """
+        return (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
     # =========================================================================
     # Public enqueue API
     # =========================================================================
@@ -71,7 +84,7 @@ class TelemetryManager:
         Input format:
           { "zone_1": { "soil_moisture_percent": 45.0, "temperature_c": 22.1, ... }, ... }
         """
-        now_iso = datetime.now().isoformat()
+        now_iso = self._iso_utc_now()
         readings = []
 
         # External devices guide requires: sensorId, type, value, unit (and optionally readingAt)
@@ -128,6 +141,11 @@ class TelemetryManager:
             "sentAt": now_iso,
             "readings": readings,
         }
+        # Debug visibility for 422 troubleshooting
+        self.logger.debug(
+            "Enqueued telemetry: %s",
+            json.dumps({k: v for k, v in payload.items() if k != "type"}, indent=2),
+        )
         self.queue.put(payload)
 
     def send_log(self, level: str, message: str):
@@ -135,12 +153,16 @@ class TelemetryManager:
             "type": "log",
             "level": str(level).lower(),
             "message": str(message),
-            "recordedAt": datetime.now().isoformat(),
+            "recordedAt": self._iso_utc_now(),
         }
+        self.logger.debug(
+            "Enqueued log: %s",
+            json.dumps({k: v for k, v in payload.items() if k != "type"}, indent=2),
+        )
         self.queue.put(payload)
 
     def send_heartbeat(self):
-        payload = {"type": "heartbeat", "timestamp": datetime.now().isoformat()}
+        payload = {"type": "heartbeat", "timestamp": self._iso_utc_now()}
         self.queue.put(payload)
 
     def send_health(self, health: Dict[str, Any]):
@@ -149,7 +171,7 @@ class TelemetryManager:
         """
         payload = {
             "type": "health",
-            "recordedAt": datetime.now().isoformat(),
+            "recordedAt": self._iso_utc_now(),
             "health": health,
         }
         self.queue.put(payload)
@@ -165,7 +187,7 @@ class TelemetryManager:
             "type": "image",
             "image_path": image_path,
             "image_type": image_type,
-            "captured_at": datetime.now().isoformat(),
+            "captured_at": self._iso_utc_now(),
             "metadata": metadata or {},
             "delete_on_success": bool(delete_on_success),
         }
@@ -203,13 +225,27 @@ class TelemetryManager:
             if msg_type == "telemetry":
                 url = f"{self._device_base()}/telemetry"
                 data = {k: v for k, v in payload.items() if k != "type"}
+                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
                 resp = requests.post(url, json=data, timeout=5)
+                if resp.status_code not in (200, 201, 202):
+                    self.logger.warning(
+                        "Telemetry POST failed: %s body=%s",
+                        resp.status_code,
+                        (resp.text or "").strip(),
+                    )
                 return resp.status_code in (200, 201, 202)
 
             if msg_type == "log":
                 url = f"{self._device_base()}/logs"
                 data = {k: v for k, v in payload.items() if k != "type"}
+                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
                 resp = requests.post(url, json=data, timeout=5)
+                if resp.status_code not in (200, 201, 202):
+                    self.logger.warning(
+                        "Log POST failed: %s body=%s",
+                        resp.status_code,
+                        (resp.text or "").strip(),
+                    )
                 return resp.status_code in (200, 201, 202)
 
             if msg_type == "health":
@@ -218,9 +254,16 @@ class TelemetryManager:
                 data = {
                     "level": "info",
                     "message": json.dumps({"type": "health", "data": health}),
-                    "recordedAt": payload.get("recordedAt") or datetime.now().isoformat(),
+                    "recordedAt": payload.get("recordedAt") or self._iso_utc_now(),
                 }
+                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
                 resp = requests.post(url, json=data, timeout=5)
+                if resp.status_code not in (200, 201, 202):
+                    self.logger.warning(
+                        "Health POST failed: %s body=%s",
+                        resp.status_code,
+                        (resp.text or "").strip(),
+                    )
                 return resp.status_code in (200, 201, 202)
 
             if msg_type == "heartbeat":
@@ -238,7 +281,7 @@ class TelemetryManager:
                 data = {
                     # Must match `docs/external-devices.md` form fields
                     "type": payload.get("image_type") or "general",
-                    "captured_at": payload.get("captured_at") or datetime.now().isoformat(),
+                    "captured_at": payload.get("captured_at") or self._iso_utc_now(),
                 }
                 metadata = payload.get("metadata") or {}
                 if metadata:
@@ -246,8 +289,20 @@ class TelemetryManager:
 
                 with open(image_path, "rb") as f:
                     files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
+                    self.logger.debug(
+                        "POST %s multipart fields=%s file=%s",
+                        url,
+                        json.dumps(data, indent=2),
+                        os.path.basename(image_path),
+                    )
                     resp = requests.post(url, files=files, data=data, timeout=15)
                     ok = resp.status_code in (200, 201, 202)
+                    if not ok:
+                        self.logger.warning(
+                            "Image POST failed: %s body=%s",
+                            resp.status_code,
+                            (resp.text or "").strip(),
+                        )
 
                 if ok and payload.get("delete_on_success"):
                     try:
