@@ -266,15 +266,38 @@ class SystemOrchestrator:
         else:
             print("  Camera Manager not initialized.")
 
-        # 3. Valve Diagnostics (Dry Run)
+        # 3. Valve Diagnostics
         print("\n--- ACTUATORS (VALVES) ---")
         print(f"Valves Configured: {len(self.config.hardware.valves)}")
+        is_mock = self.hardware.valve_controller.is_mock
+        print(f"Controller Type: {'MOCK (Simulation)' if is_mock else 'REAL (GPIO)'}")
+        if not is_mock:
+            print(
+                "Note: Physical valve presence cannot be electrically detected via GPIO alone; "
+                "this test validates GPIO pin initialization and sends open/close commands."
+            )
+
         for v in self.config.hardware.valves:
             print(f"  Testing {v.zone_id} ({v.name}) on Pin {v.pin}...")
-            self.hardware.valve_controller.open_valve(v.zone_id)
-            time.sleep(1)
-            self.hardware.valve_controller.close_valve(v.zone_id)
-            print("    OK (Dry Run/Mock)")
+            if is_mock:
+                self.hardware.valve_controller.open_valve(v.zone_id)
+                time.sleep(0.5)
+                self.hardware.valve_controller.close_valve(v.zone_id)
+                print("    OK (Simulated)")
+            else:
+                pin_ok = self.hardware.valve_controller.check_pin_availability(v.zone_id)
+                if not pin_ok:
+                    print("    FAILED (GPIO pin init failed / unavailable)")
+                    continue
+
+                opened = self.hardware.valve_controller.open_valve(v.zone_id)
+                time.sleep(0.5)
+                closed = self.hardware.valve_controller.close_valve(v.zone_id)
+
+                if opened and closed:
+                    print("    OK (GPIO initialized, open/close commands sent)")
+                else:
+                    print("    FAILED (Could not toggle valve via GPIO)")
 
         print("\n" + "=" * 40)
         print("      DIAGNOSTICS COMPLETE")

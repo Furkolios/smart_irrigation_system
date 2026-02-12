@@ -1,10 +1,14 @@
 import logging
 from typing import Optional, Dict
 
-from ..config.models import SystemConfig
+from ..config.models import SystemConfig, SystemMode
 from .arduino_manager import ArduinoManager
 from .camera_manager import CameraManager
-from ..water.valve_controller import ValveController, MockValveController
+from ..water.valve_controller import (
+    ValveController,
+    MockValveController,
+    GPIO_AVAILABLE,
+)
 
 
 class HardwareManager:
@@ -35,20 +39,27 @@ class HardwareManager:
         # Convert List[ValveConfig] to Dict[zone_id, pin] for legacy controller
         valve_map = {v.zone_id: v.pin for v in hw_config.valves}
 
-        # Check system mode for mocking
-        use_mock = self._config.system_mode in ["demo", "test"]
+        # In TEST mode we prefer real GPIO if available (to allow valve testing).
+        # In DEMO mode always use mock (simulation).
+        use_mock_valves = self._config.system_mode == SystemMode.DEMO
+        if self._config.system_mode == SystemMode.TEST:
+            use_mock_valves = not GPIO_AVAILABLE
 
-        if use_mock:
-            self.logger.info("Using MOCK Valve Controller")
-            self.valve_controller = MockValveController(valve_map)
+        self.logger.info(
+            "Using %s Valve Controller",
+            "MOCK" if use_mock_valves else "REAL",
+        )
+        if use_mock_valves:
+            self.valve_controller = MockValveController(valve_map, active_low=True)
         else:
-            self.valve_controller = ValveController(valve_map)
+            self.valve_controller = ValveController(valve_map, active_low=True)
 
         # 2. Sensors (Arduino or Mock)
         # We always initialize ArduinoManager to allow diagnostics even in mock/test mode
         self.arduino_manager = ArduinoManager(hw_config.global_arduino_config)
 
-        if use_mock:
+        use_mock_sensors = self._config.system_mode == SystemMode.DEMO
+        if use_mock_sensors:
             self.logger.info("Using MOCK Sensor Provider")
             from ..sensors.sensor_providers import MockSensorProvider
 

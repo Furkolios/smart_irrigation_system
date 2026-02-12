@@ -35,6 +35,7 @@ from typing import Dict, Set
 
 try:
     import RPi.GPIO as GPIO
+
     GPIO_AVAILABLE = True
 except ImportError:
     GPIO_AVAILABLE = False
@@ -51,11 +52,16 @@ class ValveController:
                     the relay triggers on HIGH.
     """
 
+    @property
+    def is_mock(self) -> bool:
+        return False
+
     def __init__(self, zone_pins: Dict[str, int], active_low: bool = True):
         self.zone_pins = zone_pins
         self.active_low = active_low
-        self._logger = logging.getLogger('valves')
+        self._logger = logging.getLogger("valves")
         self._open_valves: Set[str] = set()
+        self._gpio_ready = False
 
         if not GPIO_AVAILABLE:
             self._logger.warning(
@@ -80,9 +86,35 @@ class ValveController:
                 GPIO.setup(pin, GPIO.OUT)
                 GPIO.output(pin, self._state_off)  # Start with all valves closed
                 self._logger.debug(f"GPIO pin {pin} configured for {zone_id}")
-            self._logger.info(f"Valve controller initialized for {len(zone_pins)} zones")
+            self._logger.info(
+                f"Valve controller initialized for {len(zone_pins)} zones"
+            )
+            self._gpio_ready = True
         except Exception as e:
             self._logger.error(f"GPIO initialization failed: {e}")
+
+    def check_pin_availability(self, zone_id: str) -> bool:
+        """
+        Best-effort check that the configured GPIO pin for a zone can be used.
+
+        Note: This cannot electrically detect whether a solenoid valve is physically
+        connected. It only validates the software-level GPIO initialization.
+        """
+        if zone_id not in self.zone_pins:
+            self._logger.error(f"Unknown zone: {zone_id}")
+            return False
+
+        if not GPIO_AVAILABLE or not self._gpio_ready:
+            return False
+
+        pin = self.zone_pins[zone_id]
+        try:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, self._state_off)
+            return True
+        except Exception as e:
+            self._logger.error(f"GPIO pin {pin} not available for {zone_id}: {e}")
+            return False
 
     def open_valve(self, zone_id: str) -> bool:
         if zone_id not in self.zone_pins:
@@ -138,12 +170,22 @@ class ValveController:
 class MockValveController(ValveController):
     """Mock valve controller for testing without GPIO hardware."""
 
+    @property
+    def is_mock(self) -> bool:
+        return True
+
     def __init__(self, zone_pins: Dict[str, int], active_low: bool = True):
         self.zone_pins = zone_pins
         self.active_low = active_low
-        self._logger = logging.getLogger('valves')
+        self._logger = logging.getLogger("valves")
         self._open_valves: Set[str] = set()
-        self._logger.info(f"[MOCK] Valve controller initialized for {len(zone_pins)} zones")
+        self._logger.info(
+            f"[MOCK] Valve controller initialized for {len(zone_pins)} zones"
+        )
+
+    def check_pin_availability(self, zone_id: str) -> bool:
+        # In mock mode we can only validate config, not hardware.
+        return zone_id in self.zone_pins
 
     def open_valve(self, zone_id: str) -> bool:
         if zone_id not in self.zone_pins:
@@ -167,9 +209,7 @@ class MockValveController(ValveController):
 
 
 def create_valve_controller(
-    zone_pins: Dict[str, int],
-    use_mock: bool = False,
-    active_low: bool = True
+    zone_pins: Dict[str, int], use_mock: bool = False, active_low: bool = True
 ) -> ValveController:
     """
     Create appropriate valve controller based on environment.
@@ -185,7 +225,10 @@ def create_valve_controller(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     print("Valve Controller Test")
     print("=" * 50)
     zone_pins = {"zone_1": 17, "zone_2": 18}
