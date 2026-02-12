@@ -203,6 +203,19 @@ class SystemOrchestrator:
         print(f"  Cameras: {status['cameras']}")
         print(f"  Valves: {len(self.config.hardware.valves)} configured")
 
+        # Test Cameras
+        print("\nTesting Cameras...")
+        if self.hardware.camera_manager:
+            for role in status["cameras"]:
+                print(f"  Capturing from {role}...")
+                path = self.hardware.capture_image(role)
+                if path:
+                    print(f"    Success: Saved to {path}")
+                else:
+                    print(f"    Failed to capture image from {role}")
+        else:
+            print("  No Camera Manager initialized.")
+
         # Test Valve (Dry run logic)
         print("\nTesting Valves (Dry Run)...")
         for v in self.config.hardware.valves:
