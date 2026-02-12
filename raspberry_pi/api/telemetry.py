@@ -107,6 +107,7 @@ class TelemetrySender:
 
         payload = {"sentAt": now_iso, "readings": readings}
 
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         if print_to_console:
             self._logger.info(f"Sending telemetry: {len(readings)} readings")
             if len(readings) > 0:
