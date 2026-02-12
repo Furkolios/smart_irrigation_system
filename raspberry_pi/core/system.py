@@ -193,39 +193,78 @@ class SystemOrchestrator:
     def _run_test_mode(self):
         """Run system diagnostics."""
         self.logger.info("Running TEST mode diagnostics...")
-        print("\n--- SYSTEM DIAGNOSTICS ---")
+        print("\n" + "=" * 40)
+        print("   SMART IRRIGATION SYSTEM TEST")
+        print("=" * 40)
 
-        print(f"Mode: {self.config.system_mode}")
+        print(f"\nMode: {self.config.system_mode}")
 
+        # 1. Arduino Detection
+        print("\n--- SENSORS (ARDUINO) ---")
+        if self.hardware.arduino_manager:
+            print("Searching for Arduinos...")
+            self.hardware.arduino_manager.start()
+
+            # Wait a few seconds for discovery and first data packets
+            discovery_timeout = 5
+            start_time = time.time()
+            found_any = False
+
+            while time.time() - start_time < discovery_timeout:
+                readings = self.hardware.arduino_manager.get_readings()
+                if readings:
+                    if not found_any:
+                        print("Devices detected!")
+                        found_any = True
+
+                    # Print current status
+                    for dev_id, data in readings.items():
+                        print(f"\n  Device ID: {dev_id}")
+                        # Print some key sensor values if present
+                        for key, value in data.items():
+                            if key.startswith("zone_") and isinstance(value, dict):
+                                print(f"    {key}: moisture={value.get('moisture')}%")
+                            elif key in ("temp", "humidity"):
+                                print(f"    {key}: {value}")
+
+                time.sleep(1)
+
+            if not found_any:
+                print("  No Arduinos detected on serial ports.")
+
+            # Keep it running or stop it? For diagnostics, we can stop it now
+            # unless we want to keep it for the whole test
+        else:
+            print("  Arduino Manager not available.")
+
+        # 2. Camera Diagnostics
+        print("\n--- VISION ---")
         status = self.hardware.get_status()
-        print("\nHardware Status:")
-        print(f"  Arduinos Connected: {status['sensors'].get('connected', 'N/A')}")
-        print(f"  Cameras: {status['cameras']}")
-        print(f"  Valves: {len(self.config.hardware.valves)} configured")
-
-        # Test Cameras
-        print("\nTesting Cameras...")
+        print(f"Cameras Configured: {len(self.config.hardware.cameras)}")
         if self.hardware.camera_manager:
             for role in status["cameras"]:
-                print(f"  Capturing from {role}...")
+                print(f"  Testing {role}...")
                 path = self.hardware.capture_image(role)
                 if path:
-                    print(f"    Success: Saved to {path}")
+                    print(f"    SUCCESS: Captured to {path}")
                 else:
-                    print(f"    Failed to capture image from {role}")
+                    print(f"    FAILED: Could not capture from {role}")
         else:
-            print("  No Camera Manager initialized.")
+            print("  Camera Manager not initialized.")
 
-        # Test Valve (Dry run logic)
-        print("\nTesting Valves (Dry Run)...")
+        # 3. Valve Diagnostics (Dry Run)
+        print("\n--- ACTUATORS (VALVES) ---")
+        print(f"Valves Configured: {len(self.config.hardware.valves)}")
         for v in self.config.hardware.valves:
-            print(f"  Opening {v.zone_id} ({v.name})...")
+            print(f"  Testing {v.zone_id} ({v.name}) on Pin {v.pin}...")
             self.hardware.valve_controller.open_valve(v.zone_id)
             time.sleep(1)
             self.hardware.valve_controller.close_valve(v.zone_id)
-            print("  Closed.")
+            print("    OK (Dry Run/Mock)")
 
-        print("\nDiagnostics Complete.")
+        print("\n" + "=" * 40)
+        print("      DIAGNOSTICS COMPLETE")
+        print("=" * 40 + "\n")
 
     def shutdown(self):
         """Clean shutdown."""

@@ -45,6 +45,9 @@ class HardwareManager:
             self.valve_controller = ValveController(valve_map)
 
         # 2. Sensors (Arduino or Mock)
+        # We always initialize ArduinoManager to allow diagnostics even in mock/test mode
+        self.arduino_manager = ArduinoManager(hw_config.global_arduino_config)
+
         if use_mock:
             self.logger.info("Using MOCK Sensor Provider")
             from ..sensors.sensor_providers import MockSensorProvider
@@ -53,7 +56,7 @@ class HardwareManager:
                 zone_ids=[v.zone_id for v in hw_config.valves]
             )
         else:
-            self.sensor_provider = ArduinoManager(hw_config.global_arduino_config)
+            self.sensor_provider = self.arduino_manager
             if hasattr(self.sensor_provider, "start"):
                 self.sensor_provider.start()
 
@@ -99,13 +102,14 @@ class HardwareManager:
         """Get global hardware status."""
 
         sensor_status = {}
-        if isinstance(self.sensor_provider, ArduinoManager):
+        # Report on real Arduinos if manager exists, even if system is using mock provider
+        if self.arduino_manager:
             sensor_status = {
                 "type": "arduino",
-                "connected": self.sensor_provider.get_connected_count(),
-                "devices": list(self.sensor_provider.get_readings().keys()),
+                "connected": self.arduino_manager.get_connected_count(),
+                "devices": list(self.arduino_manager.get_readings().keys()),
             }
-        else:
+        elif hasattr(self.sensor_provider, "get_sensor_readings"):
             sensor_status = {
                 "type": "mock",
                 "zones": list(self.sensor_provider.get_sensor_readings().keys()),
