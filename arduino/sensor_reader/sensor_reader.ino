@@ -90,11 +90,9 @@ void loop() {
 
 float readMoisture() {
   int raw = analogRead(MOISTURE_PIN);
-  float percent = (float)(AIR_VALUE - raw) / (AIR_VALUE - WATER_VALUE) * 100.0;
+  float percent = (raw / 1023.0) * 100.0;
 
   // Clamp to 0-100
-  if (percent < 0) percent = 0;
-  if (percent > 100) percent = 100;
 
   return percent;
 }
