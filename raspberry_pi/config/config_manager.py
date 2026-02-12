@@ -78,6 +78,53 @@ class ConfigManager:
         self._config.server = self._config.server.__class__(**current_data)
         self.save_config()
 
+    def update_from_provisioning(self, provision_data: Dict[str, Any]) -> bool:
+        """
+        Persist the server-returned provisioning configuration into `server.*`.
+
+        Expected (per docs/device_technical_manual.md):
+          {
+            "deviceId": "...",
+            "sensors": [{ "localName": "...", "sensorId": "..." }],
+            "polling": { "telemetryIntervalSec": 60, "heartbeatIntervalSec": 30 }
+          }
+        """
+        try:
+            device_id = provision_data.get("deviceId") or provision_data.get("device_id")
+            sensors = provision_data.get("sensors") or []
+            polling = provision_data.get("polling") or {}
+
+            sensor_map: Dict[str, str] = {}
+            for item in sensors:
+                if not isinstance(item, dict):
+                    continue
+                local = item.get("localName")
+                sid = item.get("sensorId")
+                if local and sid:
+                    sensor_map[str(local)] = str(sid)
+
+            updates: Dict[str, Any] = {}
+            if device_id:
+                updates["device_id"] = str(device_id)
+            if sensor_map:
+                updates["sensor_map"] = sensor_map
+
+            # Polling intervals (keep existing if not provided)
+            if "telemetryIntervalSec" in polling:
+                updates["telemetry_interval_seconds"] = int(polling["telemetryIntervalSec"])
+            if "heartbeatIntervalSec" in polling:
+                updates["heartbeat_interval_seconds"] = int(polling["heartbeatIntervalSec"])
+
+            if updates:
+                self.update_server_config(**updates)
+                return True
+
+            self.logger.warning("Provisioning response contained no updates to persist")
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to persist provisioning config: {e}")
+            return False
+
 
 if __name__ == "__main__":
     # Test

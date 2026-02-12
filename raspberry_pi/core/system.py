@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..config.config_manager import ConfigManager
 from ..config.models import SystemMode
+from ..config.provisioning import DeviceProvisioner
 from .state_manager import StateManager, SystemState
 from .hardware import HardwareManager
 from ..water.decision_engine import (
@@ -49,8 +50,12 @@ class SystemOrchestrator:
         # 4. Init Logic
         self.decision_engine = self._init_decision_engine()
 
-        # 5. Init Telemetry
-        self.telemetry = TelemetryManager(self.config.server)
+        # 5. Telemetry (initialized after provisioning)
+        self.telemetry: Optional[TelemetryManager] = None
+        self._last_telemetry_at = 0.0
+        self._last_heartbeat_at = 0.0
+        self._last_image_at = 0.0
+        self._last_health_at = 0.0
 
         self._running = False
         self._stop_signal = False
@@ -91,6 +96,19 @@ class SystemOrchestrator:
         self.state_manager.transition_to(SystemState.BOOTING)
 
         try:
+            # Provisioning (only when server is enabled and not in TEST mode)
+            if (
+                self.config.server.enabled
+                and self.config.system_mode != SystemMode.TEST
+                and self.config.server.base_url
+                and (not self.config.server.device_id or not self.config.server.sensor_map)
+            ):
+                self._provision_if_needed()
+
+            # Telemetry init (after provisioning)
+            if self.config.server.enabled:
+                self.telemetry = TelemetryManager(self.config.server)
+
             # Startup checks could go here
             if self.config.system_mode == SystemMode.TEST:
                 self._run_test_mode()
@@ -174,22 +192,55 @@ class SystemOrchestrator:
                     # Blocking wait for simplicy (could be async in future)
                     time.sleep(cmd.duration_seconds)
                     self.hardware.valve_controller.close_valve(cmd.zone_id)
+                    if self.telemetry:
+                        self.telemetry.send_log(
+                            "info",
+                            f"Irrigated {cmd.zone_id} for {cmd.duration_seconds:.0f}s",
+                        )
                 else:
                     self.logger.error(f"Failed to open valve for {cmd.zone_id}")
+                    if self.telemetry:
+                        self.telemetry.send_log(
+                            "error", f"Failed to open valve for {cmd.zone_id}"
+                        )
 
-        # 6. Telemetry
-        self.telemetry.send_heartbeat()
+        # 6. Telemetry / images / health (rate-limited by config)
+        if self.telemetry:
+            now = time.monotonic()
 
-        # Prepare telemetry payload
-        telemetry_data = {
-            "sensors": raw_sensor_data,
-            "tank": {
-                "level_liters": tank_status.current_level_liters,
-                "capacity": tank_status.capacity_liters,
-            },
-            "decision": result.to_dict() if result else None,
-        }
-        self.telemetry.send_telemetry(telemetry_data)
+            if now - self._last_heartbeat_at >= self.config.server.heartbeat_interval_seconds:
+                self.telemetry.send_heartbeat()
+                self._last_heartbeat_at = now
+
+            if now - self._last_telemetry_at >= self.config.server.telemetry_interval_seconds:
+                self.telemetry.send_telemetry(raw_sensor_data)
+                self._last_telemetry_at = now
+
+            if now - self._last_health_at >= self.config.server.health_interval_seconds:
+                health = {
+                    "state": self.state_manager.get_status(),
+                    "hardware": self.hardware.get_status(),
+                    "mode": self.config.system_mode.value,
+                }
+                self.telemetry.send_health(health)
+                self._last_health_at = now
+
+            if (
+                self.config.hardware.cameras
+                and now - self._last_image_at >= self.config.server.image_interval_seconds
+            ):
+                for cam in self.config.hardware.cameras:
+                    if not cam.enabled:
+                        continue
+                    path = self.hardware.capture_image(cam.role)
+                    if path:
+                        self.telemetry.send_image(
+                            image_path=path,
+                            image_type=cam.role,
+                            metadata={"resolution": cam.resolution},
+                            delete_on_success=True,
+                        )
+                self._last_image_at = now
 
     def _run_test_mode(self):
         """Run system diagnostics."""
@@ -306,8 +357,36 @@ class SystemOrchestrator:
     def shutdown(self):
         """Clean shutdown."""
         self.state_manager.transition_to(SystemState.SHUTDOWN)
+        if self.telemetry:
+            self.telemetry.stop()
         self.hardware.cleanup()
         self.logger.info("System shutdown complete")
+
+    def _provision_if_needed(self):
+        """
+        Call the server provisioning endpoint and persist the returned configuration
+        (deviceId, sensor mapping, polling intervals) into the local YAML config.
+        """
+        try:
+            # Capabilities derived from current config
+            sensors = [
+                {"localName": v.zone_id, "type": "humidity"}
+                for v in self.config.hardware.valves
+            ]
+            cameras = [c.role for c in self.config.hardware.cameras if c.enabled]
+            capabilities = {"sensors": sensors, "cameras": cameras}
+
+            provisioner = DeviceProvisioner(base_url=self.config.server.base_url)
+            data = provisioner.provision(capabilities)
+            if not data:
+                self.logger.warning("Provisioning failed; continuing without deviceId")
+                return
+
+            persisted = self.config_manager.update_from_provisioning(data)
+            if persisted:
+                self.logger.info("Provisioning config persisted to local YAML")
+        except Exception as e:
+            self.logger.warning(f"Provisioning skipped due to error: {e}")
 
 
 if __name__ == "__main__":

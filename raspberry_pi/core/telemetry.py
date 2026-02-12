@@ -1,19 +1,25 @@
 import json
 import logging
 import os
-import requests
+from datetime import datetime
 from queue import Queue, Empty
 from threading import Thread
-from typing import Dict, Any
-from datetime import datetime
+from typing import Dict, Any, Optional
+
+import requests
 
 from ..config.models import ServerConfig
 
 
 class TelemetryManager:
     """
-    Manages sending telemetry, logs, and heartbeats to the server.
-    Implements a store-and-forward mechanism for offline resilience.
+    Device → Server telemetry transport with store-and-forward buffering.
+
+    Matches `docs/device_technical_manual.md` endpoints:
+      - POST /api/v1/external-devices/{device_id}/telemetry
+      - POST /api/v1/external-devices/{device_id}/logs
+      - POST /api/v1/external-devices/{device_id}/images (multipart)
+      - GET  /api/v1/external-devices/{device_id}/status
     """
 
     def __init__(self, config: ServerConfig):
@@ -21,16 +27,27 @@ class TelemetryManager:
         self.logger = logging.getLogger("telemetry")
 
         # In-memory queue for immediate sending
-        self.queue = Queue()
+        self.queue: "Queue[Dict[str, Any]]" = Queue()
         self._running = False
-        self._worker_thread = None
+        self._worker_thread: Optional[Thread] = None
 
         # Local storage for failed messages
         self.backlog_file = "data/telemetry_backlog.jsonl"
         os.makedirs(os.path.dirname(self.backlog_file), exist_ok=True)
 
-        if self.config.enabled:
+        if self._is_enabled():
             self.start()
+        else:
+            self.logger.info("Telemetry disabled (missing server config or deviceId)")
+
+    def _is_enabled(self) -> bool:
+        return bool(
+            self.config.enabled and self.config.base_url and self.config.device_id
+        )
+
+    @property
+    def device_id(self) -> Optional[str]:
+        return self.config.device_id
 
     def start(self):
         self._running = True
@@ -43,42 +60,100 @@ class TelemetryManager:
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
 
-    def send_telemetry(self, sensor_data: Dict[str, Any]):
-        """Queue sensor data for sending."""
+    # =========================================================================
+    # Public enqueue API
+    # =========================================================================
+
+    def send_telemetry(self, sensor_data: Dict[str, Dict[str, Any]]):
+        """
+        Queue telemetry built from raw sensor data.
+
+        Input format:
+          { "zone_1": { "soil_moisture_percent": 45.0, "temperature_c": 22.1, ... }, ... }
+        """
+        now_iso = datetime.now().isoformat()
+        readings = []
+
+        for local_name, values in (sensor_data or {}).items():
+            sensor_id = (self.config.sensor_map or {}).get(local_name)
+            if not sensor_id:
+                self.logger.warning(f"No sensorId found for localName: {local_name}")
+                continue
+
+            value = values.get("soil_moisture_percent")
+            if value is None:
+                continue
+
+            reading: Dict[str, Any] = {
+                "sensorId": sensor_id,
+                "value": round(float(value), 2),
+                "readingAt": now_iso,
+            }
+
+            extra = {}
+            for key in ("temperature_c", "humidity_percent", "luminosity_lux"):
+                if key in values and values[key] is not None:
+                    extra[key] = round(float(values[key]), 2)
+            if extra:
+                reading["metadata"] = extra
+
+            readings.append(reading)
+
         payload = {
             "type": "telemetry",
-            "deviceId": self.config.device_id,
-            "timestamp": datetime.now().isoformat(),
-            "data": sensor_data,
+            "sentAt": now_iso,
+            "readings": readings,
         }
         self.queue.put(payload)
 
     def send_log(self, level: str, message: str):
-        """Queue log message."""
         payload = {
             "type": "log",
-            "deviceId": self.config.device_id,
-            "timestamp": datetime.now().isoformat(),
-            "level": level,
-            "message": message,
+            "level": str(level).lower(),
+            "message": str(message),
+            "recordedAt": datetime.now().isoformat(),
         }
         self.queue.put(payload)
 
     def send_heartbeat(self):
-        """Queue heartbeat."""
+        payload = {"type": "heartbeat", "timestamp": datetime.now().isoformat()}
+        self.queue.put(payload)
+
+    def send_health(self, health: Dict[str, Any]):
+        """
+        Best-effort health reporting (implemented as a structured log).
+        """
         payload = {
-            "type": "heartbeat",
-            "deviceId": self.config.device_id,
-            "timestamp": datetime.now().isoformat(),
+            "type": "health",
+            "recordedAt": datetime.now().isoformat(),
+            "health": health,
         }
         self.queue.put(payload)
 
+    def send_image(
+        self,
+        image_path: str,
+        image_type: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        delete_on_success: bool = False,
+    ):
+        payload = {
+            "type": "image",
+            "image_path": image_path,
+            "image_type": image_type,
+            "captured_at": datetime.now().isoformat(),
+            "metadata": metadata or {},
+            "delete_on_success": bool(delete_on_success),
+        }
+        self.queue.put(payload)
+
+    # =========================================================================
+    # Worker / transport
+    # =========================================================================
+
     def _worker_loop(self):
-        """Main sender loop."""
         while self._running:
-            # 1. Process new messages from queue
             try:
-                # Wait up to 1s for new message
                 payload = self.queue.get(timeout=1.0)
                 if not self._send_to_server(payload):
                     self._save_to_backlog(payload)
@@ -86,46 +161,84 @@ class TelemetryManager:
             except Empty:
                 pass
 
-            # 2. Retry backlog periodically (if queue is empty or low load)
             if self.queue.empty():
                 self._process_backlog()
 
+    def _base(self) -> str:
+        return str(self.config.base_url).rstrip("/")
+
+    def _device_base(self) -> str:
+        return f"{self._base()}/api/v1/external-devices/{self.config.device_id}"
+
     def _send_to_server(self, payload: Dict[str, Any]) -> bool:
-        """Attempt to send payload to server."""
-        if not self.config.base_url:
+        if not self._is_enabled():
             return False
 
-        endpoint_map = {
-            "telemetry": "/api/v1/telemetry",
-            "log": "/api/v1/logs",
-            "heartbeat": "/api/v1/heartbeat",
-        }
-
         msg_type = payload.get("type")
-        endpoint = endpoint_map.get(msg_type)
-        if not endpoint:
-            return True  # Unknown type, "success" to discard
-
-        url = f"{self.config.base_url}{endpoint}"
-
         try:
-            # Remove internal 'type' field before sending if API doesn't expect it
-            data_to_send = {k: v for k, v in payload.items() if k != "type"}
+            if msg_type == "telemetry":
+                url = f"{self._device_base()}/telemetry"
+                data = {k: v for k, v in payload.items() if k != "type"}
+                resp = requests.post(url, json=data, timeout=5)
+                return resp.status_code in (200, 201, 202)
 
-            response = requests.post(url, json=data_to_send, timeout=5)
-            if response.status_code in [200, 201, 202]:
-                return True
-            else:
-                self.logger.warning(
-                    f"Server returned {response.status_code} for {msg_type}"
-                )
-                return False
+            if msg_type == "log":
+                url = f"{self._device_base()}/logs"
+                data = {k: v for k, v in payload.items() if k != "type"}
+                resp = requests.post(url, json=data, timeout=5)
+                return resp.status_code in (200, 201, 202)
+
+            if msg_type == "health":
+                url = f"{self._device_base()}/logs"
+                health = payload.get("health") or {}
+                data = {
+                    "level": "info",
+                    "message": json.dumps({"type": "health", "data": health}),
+                    "recordedAt": payload.get("recordedAt") or datetime.now().isoformat(),
+                }
+                resp = requests.post(url, json=data, timeout=5)
+                return resp.status_code in (200, 201, 202)
+
+            if msg_type == "heartbeat":
+                url = f"{self._device_base()}/status"
+                resp = requests.get(url, timeout=5)
+                return resp.status_code in (200, 204)
+
+            if msg_type == "image":
+                image_path = payload.get("image_path")
+                if not image_path or not os.path.exists(image_path):
+                    self.logger.warning(f"Image missing, dropping: {image_path}")
+                    return True
+
+                url = f"{self._device_base()}/images"
+                data = {
+                    "image_type": payload.get("image_type") or "general",
+                    "captured_at": payload.get("captured_at") or datetime.now().isoformat(),
+                }
+                metadata = payload.get("metadata") or {}
+                if metadata:
+                    data["metadata_json"] = json.dumps(metadata)
+
+                with open(image_path, "rb") as f:
+                    files = {"image_file": (os.path.basename(image_path), f, "image/jpeg")}
+                    resp = requests.post(url, files=files, data=data, timeout=15)
+                    ok = resp.status_code in (200, 201, 202)
+
+                if ok and payload.get("delete_on_success"):
+                    try:
+                        os.remove(image_path)
+                    except OSError:
+                        pass
+
+                return ok
+
+            # Unknown message type: drop
+            return True
         except Exception as e:
             self.logger.warning(f"Connection failed ({msg_type}): {e}")
             return False
 
     def _save_to_backlog(self, payload: Dict[str, Any]):
-        """Save failed message to local file."""
         try:
             with open(self.backlog_file, "a") as f:
                 f.write(json.dumps(payload) + "\n")
@@ -133,16 +246,13 @@ class TelemetryManager:
             self.logger.error(f"Failed to save to backlog: {e}")
 
     def _process_backlog(self):
-        """Try to send failed messages from backlog."""
         if not os.path.exists(self.backlog_file):
             return
 
-        # Rename current backlog to process it safely
         processing_file = self.backlog_file + ".processing"
         try:
             os.rename(self.backlog_file, processing_file)
         except OSError:
-            # File might represent no data or locked
             return
 
         failed_again = []
@@ -159,15 +269,17 @@ class TelemetryManager:
                         if self._send_to_server(payload):
                             sent_count += 1
                         else:
+                            # If it's an image and file vanished, don't keep retrying
+                            if payload.get("type") == "image" and not os.path.exists(
+                                payload.get("image_path") or ""
+                            ):
+                                continue
                             failed_again.append(line)
                     except json.JSONDecodeError:
-                        pass  # discard corrupt
+                        pass
         except Exception as e:
             self.logger.error(f"Error processing backlog: {e}")
-            # Ensure we don't lose everything if read fails
-            # (Simple implementation: might lose some data if crash here)
 
-        # Write back failed messages
         if failed_again:
             try:
                 with open(self.backlog_file, "a") as f:
@@ -176,7 +288,6 @@ class TelemetryManager:
             except Exception:
                 pass
 
-        # Cleanup processed file
         try:
             os.remove(processing_file)
         except OSError:

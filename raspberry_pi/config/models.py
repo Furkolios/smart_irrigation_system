@@ -52,9 +52,12 @@ class ServerConfig(BaseModel):
     enabled: bool = True
     base_url: str = "http://localhost:8000"
     device_id: Optional[str] = None
+    # Provisioning response: mapping from local sensor names (e.g. "zone_1") to server sensor UUIDs
+    sensor_map: Dict[str, str] = Field(default_factory=dict)
     telemetry_interval_seconds: int = 60
     image_interval_seconds: int = 3600
     heartbeat_interval_seconds: int = 30
+    health_interval_seconds: int = 300
     retry_policy: Dict[str, Any] = {"max_retries": 5, "backoff_factor": 1.5}
 
 
