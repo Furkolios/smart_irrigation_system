@@ -28,8 +28,10 @@ def test_telemetry_payload_construction():
         assert len(payload["readings"]) == 1
         reading = payload["readings"][0]
         assert reading["sensorId"] == "uuid-1"
+        assert reading["type"] == "humidity"
+        assert reading["unit"] == "%"
         assert reading["value"] == 45.5
-        assert reading["metadata"]["temperature_c"] == 22.0
+        assert "metadata" not in reading
 
 
 @patch("requests.get")
@@ -81,6 +83,6 @@ def test_image_sender_payload_construction(tmp_path):
         # Verify post was called
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
-        # In ImageSender.upload_image, the key is 'image_file'
-        assert "image_file" in kwargs["files"]
-        assert "image/jpeg" in kwargs["files"]["image_file"][2]
+        # In ImageSender.upload_image, the key is 'file' (external-devices contract)
+        assert "file" in kwargs["files"]
+        assert "image/jpeg" in kwargs["files"]["file"][2]
