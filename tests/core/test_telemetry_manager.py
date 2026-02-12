@@ -69,7 +69,13 @@ def test_send_telemetry_endpoint(mock_post, telemetry_manager):
         "type": "telemetry",
         "sentAt": "2026-01-01T00:00:00",
         "readings": [
-            {"sensorId": "sensor-1", "value": 12.3, "readingAt": "2026-01-01T00:00:00"}
+            {
+                "sensorId": "sensor-1",
+                "type": "humidity",
+                "value": 12.3,
+                "unit": "%",
+                "readingAt": "2026-01-01T00:00:00Z",
+            }
         ],
     }
     assert telemetry_manager._send_to_server(payload) is True

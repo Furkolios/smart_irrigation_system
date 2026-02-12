@@ -225,28 +225,64 @@ class TelemetryManager:
             if msg_type == "telemetry":
                 url = f"{self._device_base()}/telemetry"
                 data = {k: v for k, v in payload.items() if k != "type"}
-                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
+
+                # Drop nonconforming backlog entries (pre-schema-change) to avoid infinite 422 loops
+                # External devices guide requires per-reading: sensorId, type, value, unit
+                readings = data.get("readings") or []
+                for r in readings:
+                    if not isinstance(r, dict):
+                        self.logger.warning("Dropping invalid telemetry payload (bad reading type)")
+                        return True
+                    if "sensorId" not in r or "value" not in r or "type" not in r or "unit" not in r:
+                        self.logger.warning(
+                            "Dropping nonconforming telemetry payload (missing required fields): %s",
+                            json.dumps(data, indent=2),
+                        )
+                        return True
+
                 resp = requests.post(url, json=data, timeout=5)
-                if resp.status_code not in (200, 201, 202):
+                if resp.status_code in (200, 201, 202):
+                    return True
+
+                # 4xx (except rate-limit) is generally non-retryable; keep the logs and drop.
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
                     self.logger.warning(
-                        "Telemetry POST failed: %s body=%s",
+                        "Telemetry POST rejected (non-retryable): %s request=%s response=%s",
                         resp.status_code,
+                        json.dumps(data, indent=2),
                         (resp.text or "").strip(),
                     )
-                return resp.status_code in (200, 201, 202)
+                    return True
+
+                self.logger.warning(
+                    "Telemetry POST failed (will retry): %s request=%s response=%s",
+                    resp.status_code,
+                    json.dumps(data, indent=2),
+                    (resp.text or "").strip(),
+                )
+                return False
 
             if msg_type == "log":
                 url = f"{self._device_base()}/logs"
                 data = {k: v for k, v in payload.items() if k != "type"}
-                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
                 resp = requests.post(url, json=data, timeout=5)
-                if resp.status_code not in (200, 201, 202):
+                if resp.status_code in (200, 201, 202):
+                    return True
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
                     self.logger.warning(
-                        "Log POST failed: %s body=%s",
+                        "Log POST rejected (non-retryable): %s request=%s response=%s",
                         resp.status_code,
+                        json.dumps(data, indent=2),
                         (resp.text or "").strip(),
                     )
-                return resp.status_code in (200, 201, 202)
+                    return True
+                self.logger.warning(
+                    "Log POST failed (will retry): %s request=%s response=%s",
+                    resp.status_code,
+                    json.dumps(data, indent=2),
+                    (resp.text or "").strip(),
+                )
+                return False
 
             if msg_type == "health":
                 url = f"{self._device_base()}/logs"
@@ -256,15 +292,24 @@ class TelemetryManager:
                     "message": json.dumps({"type": "health", "data": health}),
                     "recordedAt": payload.get("recordedAt") or self._iso_utc_now(),
                 }
-                self.logger.debug("POST %s body=%s", url, json.dumps(data, indent=2))
                 resp = requests.post(url, json=data, timeout=5)
-                if resp.status_code not in (200, 201, 202):
+                if resp.status_code in (200, 201, 202):
+                    return True
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
                     self.logger.warning(
-                        "Health POST failed: %s body=%s",
+                        "Health POST rejected (non-retryable): %s request=%s response=%s",
                         resp.status_code,
+                        json.dumps(data, indent=2),
                         (resp.text or "").strip(),
                     )
-                return resp.status_code in (200, 201, 202)
+                    return True
+                self.logger.warning(
+                    "Health POST failed (will retry): %s request=%s response=%s",
+                    resp.status_code,
+                    json.dumps(data, indent=2),
+                    (resp.text or "").strip(),
+                )
+                return False
 
             if msg_type == "heartbeat":
                 url = f"{self._device_base()}/status"
@@ -289,18 +334,24 @@ class TelemetryManager:
 
                 with open(image_path, "rb") as f:
                     files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
-                    self.logger.debug(
-                        "POST %s multipart fields=%s file=%s",
-                        url,
-                        json.dumps(data, indent=2),
-                        os.path.basename(image_path),
-                    )
                     resp = requests.post(url, files=files, data=data, timeout=15)
                     ok = resp.status_code in (200, 201, 202)
-                    if not ok:
+                    if ok:
+                        pass
+                    elif 400 <= resp.status_code < 500 and resp.status_code != 429:
                         self.logger.warning(
-                            "Image POST failed: %s body=%s",
+                            "Image POST rejected (non-retryable): %s fields=%s response=%s",
                             resp.status_code,
+                            json.dumps(data, indent=2),
+                            (resp.text or "").strip(),
+                        )
+                        # don't retry client-side schema/config errors
+                        return True
+                    else:
+                        self.logger.warning(
+                            "Image POST failed (will retry): %s fields=%s response=%s",
+                            resp.status_code,
+                            json.dumps(data, indent=2),
                             (resp.text or "").strip(),
                         )
 
