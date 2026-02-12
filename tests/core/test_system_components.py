@@ -89,5 +89,7 @@ def test_orchestrator_init(mock_telemetry, mock_hardware, mock_config_cls):
 
     assert orch.config.system_mode == SystemMode.TEST
     mock_hardware.assert_called()
-    mock_telemetry.assert_called()
+    # Telemetry is initialized during `start()` (after provisioning), not in `__init__`
+    mock_telemetry.assert_not_called()
+    assert orch.telemetry is None
     assert orch.decision_engine is not None
