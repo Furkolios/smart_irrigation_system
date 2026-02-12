@@ -146,6 +146,7 @@ class SystemOrchestrator:
                 soil_moisture_percent=data.get("soil_moisture_percent", 0.0),
                 temperature_c=data.get("temperature_c", 20.0),
                 humidity_percent=data.get("humidity_percent", 50.0),
+                luminosity_lux=data.get("luminosity_lux", 0.0),
                 timestamp=datetime.now(),
             )
 
@@ -231,7 +232,9 @@ class SystemOrchestrator:
                         # Print some key sensor values if present
                         for key, value in data.items():
                             if key.startswith("zone_") and isinstance(value, dict):
-                                print(f"      {key}: moisture={value.get('moisture')}%")
+                                moisture = value.get("moisture")
+                                lux = value.get("lux")
+                                print(f"      {key}: moisture={moisture}%, lux={lux}")
                             elif key in ("temp", "humidity"):
                                 print(f"      {key}: {value}")
 

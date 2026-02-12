@@ -152,6 +152,7 @@ class ZoneState:
     moisture_percent: float
     temperature_c: float
     humidity_percent: float
+    luminosity_lux: float = 0.0
     water_received_liters: float = 0.0
 
 
@@ -245,6 +246,7 @@ class DemoMode:
                 moisture_percent=self._get_initial_moisture(i),
                 temperature_c=20.0 + random.uniform(0, 6),
                 humidity_percent=50.0 + random.uniform(-10, 15),
+                luminosity_lux=random.uniform(200, 1000),
             )
 
         # Tank level (fully simulated, no hardware needed)
@@ -322,6 +324,7 @@ class DemoMode:
                 soil_moisture_percent=state.moisture_percent + random.uniform(-1, 1),
                 temperature_c=state.temperature_c + random.uniform(-0.5, 0.5),
                 humidity_percent=state.humidity_percent + random.uniform(-2, 2),
+                luminosity_lux=state.luminosity_lux + random.uniform(-20, 20),
             )
 
         # Tank status (fully simulated)
@@ -383,6 +386,7 @@ class DemoMode:
                     "soil_moisture_percent": reading.soil_moisture_percent,
                     "temperature_c": reading.temperature_c,
                     "humidity_percent": reading.humidity_percent,
+                    "luminosity_lux": reading.luminosity_lux,
                 }
                 for zone_id, reading in sensor_data.items()
             }
@@ -467,6 +471,7 @@ class DemoMode:
                     "moisture_percent": round(state.moisture_percent, 1),
                     "temperature_c": round(state.temperature_c, 1),
                     "humidity_percent": round(state.humidity_percent, 1),
+                    "luminosity_lux": round(state.luminosity_lux, 1),
                     "water_received_liters": round(state.water_received_liters, 2),
                 }
                 for state in self.zone_states.values()

@@ -282,6 +282,7 @@ class IrrigationController:
                 soil_moisture_percent=data.get("soil_moisture_percent", 50.0),
                 temperature_c=data.get("temperature_c", 20.0),
                 humidity_percent=data.get("humidity_percent", 50.0),
+                luminosity_lux=data.get("luminosity_lux", 0.0),
             )
             for zone_id, data in raw.items()
         }
@@ -405,6 +406,7 @@ class IrrigationController:
                 soil_moisture_percent=data.get("soil_moisture_percent", 50.0),
                 temperature_c=data.get("temperature_c", 20.0),
                 humidity_percent=data.get("humidity_percent", 50.0),
+                luminosity_lux=data.get("luminosity_lux", 0.0),
             )
             for zone_id, data in raw_sensors.items()
         }
@@ -475,6 +477,7 @@ class IrrigationController:
                     "moisture_percent": r.soil_moisture_percent,
                     "temperature_c": r.temperature_c,
                     "humidity_percent": r.humidity_percent,
+                    "luminosity_lux": r.luminosity_lux,
                 }
                 for zone_id, r in sensor_data.items()
             },

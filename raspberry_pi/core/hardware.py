@@ -80,6 +80,12 @@ class HardwareManager:
                 for key, value in data.items():
                     if key.startswith("zone_") and isinstance(value, dict):
                         zone_data = value.copy()
+                        # Map Arduino protocol to system protocol
+                        if "moisture" in value:
+                            zone_data["soil_moisture_percent"] = value["moisture"]
+                        if "lux" in value:
+                            zone_data["luminosity_lux"] = value["lux"]
+
                         if "temp" in data and "temperature_c" not in zone_data:
                             zone_data["temperature_c"] = data["temp"]
                         if "humidity" in data and "humidity_percent" not in zone_data:
