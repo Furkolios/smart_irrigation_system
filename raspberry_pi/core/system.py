@@ -202,38 +202,49 @@ class SystemOrchestrator:
         # 1. Arduino Detection
         print("\n--- SENSORS (ARDUINO) ---")
         if self.hardware.arduino_manager:
-            print("Searching for Arduinos...")
+            print("Starting Arduino Manager...")
             self.hardware.arduino_manager.start()
 
             # Wait a few seconds for discovery and first data packets
-            discovery_timeout = 5
+            discovery_timeout = 8  # Increased timeout
             start_time = time.time()
-            found_any = False
+            found_any_data = False
+            last_port_count = -1
+
+            print(f"Scanning for Arduinos (Timeout: {discovery_timeout}s)...")
 
             while time.time() - start_time < discovery_timeout:
+                port_count = self.hardware.arduino_manager.get_connected_count()
+                if port_count != last_port_count:
+                    print(f"  Ports Connected: {port_count}")
+                    last_port_count = port_count
+
                 readings = self.hardware.arduino_manager.get_readings()
                 if readings:
-                    if not found_any:
-                        print("Devices detected!")
-                        found_any = True
+                    if not found_any_data:
+                        print("  Valid data received!")
+                        found_any_data = True
 
                     # Print current status
                     for dev_id, data in readings.items():
-                        print(f"\n  Device ID: {dev_id}")
+                        print(f"\n    Device Detected: {dev_id}")
                         # Print some key sensor values if present
                         for key, value in data.items():
                             if key.startswith("zone_") and isinstance(value, dict):
-                                print(f"    {key}: moisture={value.get('moisture')}%")
+                                print(f"      {key}: moisture={value.get('moisture')}%")
                             elif key in ("temp", "humidity"):
-                                print(f"    {key}: {value}")
+                                print(f"      {key}: {value}")
 
                 time.sleep(1)
 
-            if not found_any:
-                print("  No Arduinos detected on serial ports.")
-
-            # Keep it running or stop it? For diagnostics, we can stop it now
-            # unless we want to keep it for the whole test
+            if not found_any_data:
+                if last_port_count > 0:
+                    print(
+                        f"  FAILURE: {last_port_count} port(s) connected, but no valid JSON data received."
+                    )
+                    print("  Check Arduino code and baud rate (9600).")
+                else:
+                    print("  No Arduinos detected on serial ports.")
         else:
             print("  Arduino Manager not available.")
 

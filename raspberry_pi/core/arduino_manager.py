@@ -149,8 +149,20 @@ class ArduinoManager:
             # Validation: Check required fields
             # Required: device_id, timestamp
             if "device_id" not in data:
-                # self.logger.debug(f"Ignored data without device_id: {raw_line}")
-                return
+                # Try to infer device_id from keys or use port
+                device_id = None
+                for key in data.keys():
+                    if key.startswith("zone_"):
+                        device_id = key
+                        break
+
+                if not device_id:
+                    device_id = port  # Fallback to port name as ID
+
+                data["device_id"] = device_id
+                self.logger.debug(
+                    f"Inferred device_id '{device_id}' from data on {port}"
+                )
 
             device_id = data["device_id"]
 
