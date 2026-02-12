@@ -14,7 +14,7 @@ hardware:
       # device_path: "/dev/video0" # Optional: auto-detect if missing
 
     - role: "plant"
-      resolution: [1280, 720]
+      resolution: [640, 480]
       # device_path: "/dev/video1"
 
   valves:
@@ -25,7 +25,7 @@ hardware:
 
     - zone_id: "zone_2"
       name: "Basil"
-      pin: 27
+      pin: 18
       flow_rate_lpm: 1.5
 
 server:
