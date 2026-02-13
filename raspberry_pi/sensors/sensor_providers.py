@@ -34,6 +34,7 @@ from typing import Dict, List, Optional
 
 try:
     import serial
+
     SERIAL_AVAILABLE = True
 except ImportError:
     SERIAL_AVAILABLE = False
@@ -42,6 +43,7 @@ except ImportError:
 # =============================================================================
 # ABSTRACT INTERFACE
 # =============================================================================
+
 
 class SensorDataProvider(ABC):
     """
@@ -74,6 +76,7 @@ class SensorDataProvider(ABC):
 # SINGLE ARDUINO SENSOR PROVIDER
 # =============================================================================
 
+
 class ArduinoSensorProvider(SensorDataProvider):
     """
     Reads sensor data from a single Arduino over serial connection.
@@ -85,10 +88,7 @@ class ArduinoSensorProvider(SensorDataProvider):
     """
 
     def __init__(
-        self,
-        port: str = "/dev/ttyACM0",
-        baud_rate: int = 9600,
-        timeout: float = 5.0
+        self, port: str = "/dev/ttyACM0", baud_rate: int = 9600, timeout: float = 5.0
     ):
         if not SERIAL_AVAILABLE:
             raise ImportError(
@@ -102,16 +102,14 @@ class ArduinoSensorProvider(SensorDataProvider):
 
         self._serial: Optional[serial.Serial] = None
         self._last_readings: Dict[str, Dict[str, float]] = {}
-        self._logger = logging.getLogger(f'arduino[{port}]')
+        self._logger = logging.getLogger(f"arduino[{port}]")
 
         self._connect()
 
     def _connect(self) -> bool:
         try:
             self._serial = serial.Serial(
-                port=self.port,
-                baudrate=self.baud_rate,
-                timeout=self.timeout
+                port=self.port, baudrate=self.baud_rate, timeout=self.timeout
             )
             self._serial.reset_input_buffer()
             self._logger.info(f"Connected to Arduino on {self.port}")
@@ -183,6 +181,7 @@ class ArduinoSensorProvider(SensorDataProvider):
 # MULTI-ARDUINO SENSOR PROVIDER (One Arduino Per Zone)
 # =============================================================================
 
+
 class MultiArduinoSensorProvider(SensorDataProvider):
     """
     Reads sensor data from multiple Arduinos, each handling one zone.
@@ -200,10 +199,7 @@ class MultiArduinoSensorProvider(SensorDataProvider):
     """
 
     def __init__(
-        self,
-        port_zone_map: Dict[str, str],
-        baud_rate: int = 9600,
-        timeout: float = 5.0
+        self, port_zone_map: Dict[str, str], baud_rate: int = 9600, timeout: float = 5.0
     ):
         if not SERIAL_AVAILABLE:
             raise ImportError(
@@ -212,7 +208,7 @@ class MultiArduinoSensorProvider(SensorDataProvider):
             )
 
         self.port_zone_map = port_zone_map
-        self._logger = logging.getLogger('multi_arduino')
+        self._logger = logging.getLogger("multi_arduino")
 
         # Create one ArduinoSensorProvider per port
         self._providers: Dict[str, ArduinoSensorProvider] = {}
@@ -224,7 +220,9 @@ class MultiArduinoSensorProvider(SensorDataProvider):
                 self._providers[zone_id] = provider
                 self._logger.info(f"Arduino for {zone_id} connected on {port}")
             except Exception as e:
-                self._logger.error(f"Failed to connect Arduino for {zone_id} on {port}: {e}")
+                self._logger.error(
+                    f"Failed to connect Arduino for {zone_id} on {port}: {e}"
+                )
 
         self._logger.info(
             f"Multi-Arduino provider initialized: "
@@ -265,6 +263,7 @@ class MultiArduinoSensorProvider(SensorDataProvider):
 # MOCK SENSOR PROVIDER (For Testing)
 # =============================================================================
 
+
 class MockSensorProvider(SensorDataProvider):
     """
     Mock sensor provider for testing without Arduino hardware.
@@ -280,13 +279,13 @@ class MockSensorProvider(SensorDataProvider):
         self,
         zone_ids: list,
         initial_moisture: float = 40.0,
-        decay_rate_per_hour: float = 2.0
+        decay_rate_per_hour: float = 2.0,
     ):
         self.zone_ids = zone_ids
         self.decay_rate = decay_rate_per_hour
         self._moisture_levels = {z: initial_moisture for z in zone_ids}
         self._last_update = datetime.now()
-        self._logger = logging.getLogger('mock_sensors')
+        self._logger = logging.getLogger("mock_sensors")
         self._logger.info(f"Mock sensor provider initialized for {len(zone_ids)} zones")
 
     def get_sensor_readings(self) -> Dict[str, Dict[str, float]]:
@@ -310,10 +309,10 @@ class MockSensorProvider(SensorDataProvider):
             new_moisture = max(10, current_moisture - (hours_elapsed * self.decay_rate))
             self._moisture_levels[zone_id] = new_moisture
             readings[zone_id] = {
-                'soil_moisture_percent': new_moisture + random.uniform(-1, 1),
-                'temperature_c': 22.0 + random.uniform(-2, 5),
-                'humidity_percent': 55.0 + random.uniform(-5, 10),
-                'luminosity_lux': round(base_lux + random.uniform(-1000, 1000), 1),
+                "soil_moisture_percent": new_moisture + random.uniform(-1, 1),
+                "temperature_c": 22.0 + random.uniform(-2, 5),
+                "humidity_percent": 55.0 + random.uniform(-5, 10),
+                "luminosity_lux": round(base_lux + random.uniform(-1000, 1000), 1),
             }
         self._last_update = now
         return readings
@@ -324,7 +323,9 @@ class MockSensorProvider(SensorDataProvider):
             self._moisture_levels[zone_id] = min(
                 90, self._moisture_levels[zone_id] + moisture_increase
             )
-            self._logger.debug(f"Zone {zone_id} irrigated: +{moisture_increase:.1f}% moisture")
+            self._logger.debug(
+                f"Zone {zone_id} irrigated: +{moisture_increase:.1f}% moisture"
+            )
 
     def set_moisture(self, zone_id: str, moisture: float):
         if zone_id in self._moisture_levels:
@@ -338,17 +339,14 @@ class MockSensorProvider(SensorDataProvider):
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     print("Sensor Providers Test")
     print("=" * 50)
 
     print("\n--- Mock Sensor Provider (with luminosity) ---")
-    mock = MockSensorProvider(
-        zone_ids=["zone_1", "zone_2"],
-        initial_moisture=45.0
-    )
+    mock = MockSensorProvider(zone_ids=["zone_1", "zone_2"], initial_moisture=45.0)
 
     readings = mock.get_sensor_readings()
     for zone_id, data in readings.items():

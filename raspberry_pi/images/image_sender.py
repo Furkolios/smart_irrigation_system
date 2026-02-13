@@ -12,7 +12,7 @@ import os
 import json
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 
@@ -50,13 +50,23 @@ class ImageSender:
 
         try:
             with open(image_path, "rb") as f:
-                files = {"image_file": (os.path.basename(image_path), f, "image/jpeg")}
+                # Must match docs/external-devices.md:
+                # - file: binary image
+                # - type: image category
+                # - captured_at: ISO-8601 timestamp
+                # - metadata: JSON string (optional)
+                files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
                 data = {
-                    "image_type": image_type,
-                    "captured_at": datetime.now().isoformat(),
+                    "type": image_type,
+                    "captured_at": (
+                        datetime.now(timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    ),
                 }
                 if metadata:
-                    data["metadata_json"] = json.dumps(metadata)
+                    data["metadata"] = json.dumps(metadata)
 
                 self.logger.info(f"Uploading image {image_path} to {self.url}")
                 response = requests.post(

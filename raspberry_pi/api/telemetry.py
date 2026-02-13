@@ -16,7 +16,7 @@ import os
 import json
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from dotenv import load_dotenv
@@ -61,6 +61,15 @@ class TelemetrySender:
         self._logger = logging.getLogger("telemetry")
         self._logger.info(f"Telemetry initialized for device {self.device_id}")
 
+    @staticmethod
+    def _iso_utc_now() -> str:
+        return (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
     # =========================================================================
     # TELEMETRY (Section 3.1)
     # =========================================================================
@@ -75,42 +84,62 @@ class TelemetrySender:
             sensor_data: Raw sensor readings from providers.
                          Format: {"zone_1": {"soil_moisture_percent": 45.0, ...}, ...}
         """
-        now_iso = datetime.now().isoformat()
+        now_iso = self._iso_utc_now()
         readings = []
 
-        for local_name, values in sensor_data.items():
-            sensor_id = self.sensor_map.get(local_name)
-            if not sensor_id:
-                self._logger.warning(f"No sensorId found for localName: {local_name}")
-                continue
+        # Must follow docs/external-devices.md schema:
+        # sensorId, type, value, unit (readingAt optional)
+        for zone_id, values in (sensor_data or {}).items():
+            # Soil moisture as humidity %
+            soil_sensor_id = self.sensor_map.get(zone_id)
+            soil_value = (values or {}).get("soil_moisture_percent")
+            if soil_sensor_id and soil_value is not None:
+                readings.append(
+                    {
+                        "sensorId": soil_sensor_id,
+                        "type": "humidity",
+                        "value": round(float(soil_value), 2),
+                        "unit": "%",
+                        "readingAt": now_iso,
+                    }
+                )
+            elif soil_value is not None:
+                self._logger.warning(f"No sensorId found for localName: {zone_id}")
 
-            # Send the primary value (moisture) as the main reading
-            value = values.get("soil_moisture_percent")
-            if value is not None:
-                reading = {
-                    "sensorId": sensor_id,
-                    "value": round(float(value), 2),
-                    "readingAt": now_iso,
-                }
+            # Optional extra sensors if provisioned/mapped
+            temp_sensor_id = self.sensor_map.get(f"{zone_id}_temperature")
+            temp_value = (values or {}).get("temperature_c")
+            if temp_sensor_id and temp_value is not None:
+                readings.append(
+                    {
+                        "sensorId": temp_sensor_id,
+                        "type": "temperature",
+                        "value": round(float(temp_value), 2),
+                        "unit": "C",
+                        "readingAt": now_iso,
+                    }
+                )
 
-                # Attach additional sensor data as metadata
-                # These are forwarded to the server but not used in
-                # local decision logic (e.g. luminosity)
-                extra = {}
-                for key in ("temperature_c", "humidity_percent", "luminosity_lux"):
-                    if key in values and values[key] is not None:
-                        extra[key] = round(float(values[key]), 2)
-                if extra:
-                    reading["metadata"] = extra
-
-                readings.append(reading)
+            air_hum_sensor_id = self.sensor_map.get(f"{zone_id}_humidity")
+            air_hum_value = (values or {}).get("humidity_percent")
+            if air_hum_sensor_id and air_hum_value is not None:
+                readings.append(
+                    {
+                        "sensorId": air_hum_sensor_id,
+                        "type": "humidity",
+                        "value": round(float(air_hum_value), 2),
+                        "unit": "%",
+                        "readingAt": now_iso,
+                    }
+                )
 
         payload = {"sentAt": now_iso, "readings": readings}
 
         if print_to_console:
             self._logger.info(f"Sending telemetry: {len(readings)} readings")
             if len(readings) > 0:
-                self._logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+                # Keep visible without requiring debug logging
+                self._logger.info(f"Payload: {json.dumps(payload, indent=2)}")
 
         return self._post_request(self.telemetry_url, payload)
 
@@ -126,7 +155,7 @@ class TelemetrySender:
         payload = {
             "level": level.lower(),
             "message": message,
-            "recordedAt": datetime.now().isoformat(),
+            "recordedAt": self._iso_utc_now(),
         }
         return self._post_request(self.log_url, payload)
 
